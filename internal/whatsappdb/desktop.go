@@ -248,7 +248,7 @@ func readChatRows(ctx context.Context, db *sql.DB) ([]store.Chat, error) {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []store.Chat
+	merged := map[string]store.Chat{}
 	for rows.Next() {
 		var c store.Chat
 		var last sql.NullFloat64
@@ -264,10 +264,39 @@ func readChatRows(ctx context.Context, db *sql.DB) ([]store.Chat, error) {
 		c.Archived = archived != 0
 		c.Removed = removed != 0
 		c.Hidden = hidden != 0
-		out = append(out, c)
+		if existing, ok := merged[c.JID]; ok {
+			merged[c.JID] = mergeChatRows(existing, c)
+			continue
+		}
+		merged[c.JID] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]store.Chat, 0, len(merged))
+	for _, chat := range merged {
+		out = append(out, chat)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastMessageAt.After(out[j].LastMessageAt) })
-	return out, rows.Err()
+	return out, nil
+}
+
+func mergeChatRows(existing, candidate store.Chat) store.Chat {
+	merged := existing
+	older := candidate
+	if merged.LastMessageAt.Before(candidate.LastMessageAt) {
+		merged = candidate
+		older = existing
+	}
+	merged.MessageCount += older.MessageCount
+	if merged.Name == "" {
+		merged.Name = older.Name
+	}
+	if merged.RawSessionType == 0 && older.RawSessionType != 0 {
+		merged.RawSessionType = older.RawSessionType
+		merged.Kind = chatKind(merged.JID, merged.RawSessionType)
+	}
+	return merged
 }
 
 func readGroupRows(ctx context.Context, db *sql.DB) ([]store.Group, error) {
