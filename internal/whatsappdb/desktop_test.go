@@ -69,6 +69,62 @@ func TestImportDesktopCoreDataShape(t *testing.T) {
 	}
 }
 
+func TestImportDesktopDuplicateSourceRows(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `
+insert into ZWACHATSESSION values (3, '111@s.whatsapp.net', 'Bob New', 700000030, 5, 1, 0, 0, 0);
+insert into ZWAMESSAGE values (5, 3, null, null, 'dm-new', 0, 700000030, 'newest message', 0, 0, '111@s.whatsapp.net', '', 'Bob New');
+insert into ZWAGROUPINFO values (2, 2, 'owner-new@s.whatsapp.net', 699998000);
+insert into ZWAGROUPMEMBER values (2, 2, '222@lid', 'Alice Duplicate', 'Alicia', 0, 0);
+`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+
+	stats, err := Import(ctx, archive, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Chats != 2 || stats.Groups != 1 || stats.Participants != 1 || stats.Messages != 5 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+
+	chats, err := archive.ListChats(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chats) != 2 {
+		t.Fatalf("expected 2 chats, got %d", len(chats))
+	}
+	if chats[0].JID != "111@s.whatsapp.net" || chats[0].Name != "Bob New" || chats[0].UnreadCount != 5 || !chats[0].Archived {
+		t.Fatalf("duplicate chat rows were not merged correctly: %+v", chats[0])
+	}
+
+	exported, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exported.Groups) != 1 || exported.Groups[0].OwnerJID != "owner@s.whatsapp.net" {
+		t.Fatalf("duplicate group rows were not merged correctly: %+v", exported.Groups)
+	}
+	if len(exported.Participants) != 1 || !exported.Participants[0].IsAdmin || !exported.Participants[0].IsActive {
+		t.Fatalf("duplicate participant rows were not merged correctly: %+v", exported.Participants)
+	}
+}
+
 func TestDiscoverAndHelpers(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()

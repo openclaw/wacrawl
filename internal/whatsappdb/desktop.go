@@ -248,7 +248,7 @@ func readChatRows(ctx context.Context, db *sql.DB) ([]store.Chat, error) {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []store.Chat
+	merged := map[string]store.Chat{}
 	for rows.Next() {
 		var c store.Chat
 		var last sql.NullFloat64
@@ -264,10 +264,39 @@ func readChatRows(ctx context.Context, db *sql.DB) ([]store.Chat, error) {
 		c.Archived = archived != 0
 		c.Removed = removed != 0
 		c.Hidden = hidden != 0
-		out = append(out, c)
+		if existing, ok := merged[c.JID]; ok {
+			merged[c.JID] = mergeChatRows(existing, c)
+			continue
+		}
+		merged[c.JID] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]store.Chat, 0, len(merged))
+	for _, chat := range merged {
+		out = append(out, chat)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].LastMessageAt.After(out[j].LastMessageAt) })
-	return out, rows.Err()
+	return out, nil
+}
+
+func mergeChatRows(existing, candidate store.Chat) store.Chat {
+	merged := existing
+	older := candidate
+	if merged.LastMessageAt.Before(candidate.LastMessageAt) {
+		merged = candidate
+		older = existing
+	}
+	merged.MessageCount += older.MessageCount
+	if merged.Name == "" {
+		merged.Name = older.Name
+	}
+	if merged.RawSessionType == 0 && older.RawSessionType != 0 {
+		merged.RawSessionType = older.RawSessionType
+		merged.Kind = chatKind(merged.JID, merged.RawSessionType)
+	}
+	return merged
 }
 
 func readGroupRows(ctx context.Context, db *sql.DB) ([]store.Group, error) {
@@ -276,7 +305,7 @@ func readGroupRows(ctx context.Context, db *sql.DB) ([]store.Group, error) {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []store.Group
+	merged := map[string]store.Group{}
 	for rows.Next() {
 		var g store.Group
 		var created sql.NullFloat64
@@ -287,10 +316,35 @@ func readGroupRows(ctx context.Context, db *sql.DB) ([]store.Group, error) {
 			continue
 		}
 		g.CreatedAt = appleNullTime(created)
-		out = append(out, g)
+		if existing, ok := merged[g.JID]; ok {
+			merged[g.JID] = mergeGroupRows(existing, g)
+			continue
+		}
+		merged[g.JID] = g
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]store.Group, 0, len(merged))
+	for _, group := range merged {
+		out = append(out, group)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].JID < out[j].JID })
-	return out, rows.Err()
+	return out, nil
+}
+
+func mergeGroupRows(existing, candidate store.Group) store.Group {
+	merged := existing
+	if merged.Name == "" {
+		merged.Name = candidate.Name
+	}
+	if merged.OwnerJID == "" {
+		merged.OwnerJID = candidate.OwnerJID
+	}
+	if merged.CreatedAt.IsZero() || (!candidate.CreatedAt.IsZero() && candidate.CreatedAt.Before(merged.CreatedAt)) {
+		merged.CreatedAt = candidate.CreatedAt
+	}
+	return merged
 }
 
 func readParticipantRows(ctx context.Context, db *sql.DB) ([]store.GroupParticipant, error) {
@@ -299,7 +353,7 @@ func readParticipantRows(ctx context.Context, db *sql.DB) ([]store.GroupParticip
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []store.GroupParticipant
+	merged := map[string]store.GroupParticipant{}
 	for rows.Next() {
 		var p store.GroupParticipant
 		var admin, active int
@@ -311,7 +365,19 @@ func readParticipantRows(ctx context.Context, db *sql.DB) ([]store.GroupParticip
 		}
 		p.IsAdmin = admin != 0
 		p.IsActive = active != 0
-		out = append(out, p)
+		key := p.GroupJID + "\x00" + p.UserJID
+		if existing, ok := merged[key]; ok {
+			merged[key] = mergeParticipantRows(existing, p)
+			continue
+		}
+		merged[key] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]store.GroupParticipant, 0, len(merged))
+	for _, participant := range merged {
+		out = append(out, participant)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].GroupJID == out[j].GroupJID {
@@ -319,7 +385,20 @@ func readParticipantRows(ctx context.Context, db *sql.DB) ([]store.GroupParticip
 		}
 		return out[i].GroupJID < out[j].GroupJID
 	})
-	return out, rows.Err()
+	return out, nil
+}
+
+func mergeParticipantRows(existing, candidate store.GroupParticipant) store.GroupParticipant {
+	merged := existing
+	if merged.ContactName == "" {
+		merged.ContactName = candidate.ContactName
+	}
+	if merged.FirstName == "" {
+		merged.FirstName = candidate.FirstName
+	}
+	merged.IsAdmin = merged.IsAdmin || candidate.IsAdmin
+	merged.IsActive = merged.IsActive || candidate.IsActive
+	return merged
 }
 
 func readMessageRows(ctx context.Context, db *sql.DB, sourceRoot string, names map[string]string) ([]store.Message, int, error) {

@@ -10,6 +10,10 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 
 - Surface WhatsApp Desktop per-chat unread counts in `status` and `chats`, with `chats --unread` and an `unread` shortcut command.
 
+### Fixed
+
+- Merge duplicate WhatsApp Desktop chat, group, and group participant rows during import so older app data does not fail archive sync on unique constraints.
+
 ### Security
 
 - Document the encrypted Git backup threat model, visible metadata, key recovery, and rotation limits.
