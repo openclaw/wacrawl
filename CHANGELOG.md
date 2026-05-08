@@ -6,6 +6,14 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-08
+
+### Fixed
+
+- Update the baked-in CLI version fallback so binaries installed with
+  `go install github.com/steipete/wacrawl/cmd/wacrawl@v0.2.4` report the
+  released version.
+
 ## [0.2.3] - 2026-05-08
 
 ### Fixed
