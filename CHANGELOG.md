@@ -6,6 +6,13 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-08
+
+### Fixed
+
+- Keep the backup regression suite above the CI coverage floor after moving
+  shared age encryption helpers into `crawlkit`.
+
 ## [0.2.1] - 2026-05-08
 
 ### Changed

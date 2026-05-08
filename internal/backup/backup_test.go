@@ -194,6 +194,35 @@ func TestConfigRoundTrip(t *testing.T) {
 	if err := SaveConfig(t.TempDir(), cfg); err == nil {
 		t.Fatal("expected directory config save error")
 	}
+
+	badJSON := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(badJSON, []byte("{bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(badJSON); err == nil {
+		t.Fatal("expected invalid config JSON error")
+	}
+
+	overridePath := filepath.Join(t.TempDir(), "override.json")
+	if err := SaveConfig(overridePath, DefaultConfig()); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolveOptions(Options{
+		ConfigPath:  overridePath,
+		Repo:        "~/Projects/backup",
+		Remote:      "https://example.invalid/repo.git",
+		Identity:    "~/.wacrawl/test.key",
+		Recipients:  []string{" age1two ", "age1one"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resolved.Repo, filepath.Join("Projects", "backup")) || resolved.Remote != "https://example.invalid/repo.git" || !strings.Contains(resolved.Identity, filepath.Join(".wacrawl", "test.key")) {
+		t.Fatalf("options did not resolve overrides: %+v", resolved)
+	}
+	if got := normalizedStrings(resolved.Recipients); strings.Join(got, ",") != "age1one,age1two" {
+		t.Fatalf("recipients did not normalize: %#v", got)
+	}
 }
 
 func TestCryptoHelpers(t *testing.T) {
@@ -386,6 +415,31 @@ func TestSnapshotErrorAndUtilityPaths(t *testing.T) {
 	}
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Fatal("expected stale shard removal")
+	}
+
+	left := Manifest{
+		Format:     formatVersion,
+		Encrypted:  true,
+		Recipients: []string{" age1b", "age1a", "age1a"},
+		Counts:     Counts{Messages: 1},
+		Shards:     []ShardEntry{{Table: "messages", Path: "data/messages/2026/05.jsonl.gz.age", Rows: 1, SHA256: "abc", Bytes: 10}},
+	}
+	right := left
+	right.Recipients = []string{"age1a", "age1b"}
+	right.Shards = append([]ShardEntry(nil), left.Shards...)
+	right.Shards[0].Bytes = 20
+	if !equivalentManifest(left, right) {
+		t.Fatal("equivalent manifests should ignore recipient order and byte drift")
+	}
+	right.Shards[0].SHA256 = "def"
+	if equivalentManifest(left, right) {
+		t.Fatal("manifest hash changes should not be equivalent")
+	}
+	if !sameStrings([]string{" b ", "a", "a"}, []string{"a", "b"}) {
+		t.Fatal("sameStrings should trim, sort, and deduplicate")
+	}
+	if sameStrings([]string{"a"}, []string{"a", "b"}) {
+		t.Fatal("sameStrings should detect different values")
 	}
 }
 
