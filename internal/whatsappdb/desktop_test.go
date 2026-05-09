@@ -125,6 +125,59 @@ insert into ZWAGROUPMEMBER values (2, 2, '222@lid', 'Alice Duplicate', 'Alicia',
 	}
 }
 
+func TestImportDesktopUsesProfilePushNames(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `
+create table ZWAPROFILEPUSHNAME (Z_PK integer primary key, ZJID varchar, ZPUSHNAME varchar);
+insert into ZWAPROFILEPUSHNAME values (1, '333@s.whatsapp.net', 'Profile Pat');
+insert into ZWAGROUPMEMBER values (2, 2, '333@s.whatsapp.net', '', '+EAA=', 0, 1);
+insert into ZWAMESSAGE values (5, 2, 2, null, 'profile-name', 0, 700000004, 'profile-backed sender', 0, 0, '123@g.us', '', '+EAA=');
+`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, err := archive.Messages(ctx, store.MessageFilter{ChatJID: "123@g.us", Limit: 10, Asc: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found store.Message
+	for _, msg := range msgs {
+		if msg.MessageID == "profile-name" {
+			found = msg
+			break
+		}
+	}
+	if found.SenderJID != "333@s.whatsapp.net" || found.SenderName != "Profile Pat" {
+		t.Fatalf("profile push name was not used for sender: %+v", found)
+	}
+
+	results, err := archive.Search(ctx, store.MessageFilter{Query: "Profile Pat", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].MessageID != "profile-name" {
+		t.Fatalf("profile push name was not indexed for search: %+v", results)
+	}
+}
+
 func TestImportDesktopCopyMedia(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()

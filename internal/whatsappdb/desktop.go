@@ -328,6 +328,11 @@ func readChats(ctx context.Context, path, sourceRoot string, names map[string]st
 		return nil, nil, nil, nil, 0, err
 	}
 	defer closeFn()
+	profileNames, err := readProfilePushNameRows(ctx, db)
+	if err != nil {
+		return nil, nil, nil, nil, 0, err
+	}
+	mergeMissingNames(names, profileNames)
 	chats, err := readChatRows(ctx, db)
 	if err != nil {
 		return nil, nil, nil, nil, 0, err
@@ -345,6 +350,34 @@ func readChats(ctx context.Context, path, sourceRoot string, names map[string]st
 		return nil, nil, nil, nil, 0, err
 	}
 	return chats, groups, participants, messages, mediaCount, nil
+}
+
+func readProfilePushNameRows(ctx context.Context, db *sql.DB) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `select coalesce(ZJID,''), coalesce(ZPUSHNAME,'') from ZWAPROFILEPUSHNAME`)
+	if err != nil {
+		// Older or fixture databases may not have this table.
+		return map[string]string{}, nil
+	}
+	defer func() { _ = rows.Close() }()
+	names := map[string]string{}
+	for rows.Next() {
+		var jid, name string
+		if err := rows.Scan(&jid, &name); err != nil {
+			return nil, err
+		}
+		if jid != "" && name != "" {
+			names[jid] = name
+		}
+	}
+	return names, rows.Err()
+}
+
+func mergeMissingNames(dst, src map[string]string) {
+	for jid, name := range src {
+		if strings.TrimSpace(dst[jid]) == "" {
+			dst[jid] = name
+		}
+	}
 }
 
 func readChatRows(ctx context.Context, db *sql.DB) ([]store.Chat, error) {
@@ -561,7 +594,7 @@ func sender(fromMe bool, chatJID, fromJID, toJID, pushName, memberJID, memberNam
 		return firstNonEmpty(toJID), "me"
 	}
 	jid := firstNonEmpty(memberJID, fromJID, chatJID)
-	name := firstNonEmpty(memberName, memberFirst, pushName, names[jid], names[strings.TrimSuffix(jid, "@lid")], jid)
+	name := firstNonEmpty(memberName, names[jid], names[strings.TrimSuffix(jid, "@lid")], memberFirst, pushName, jid)
 	return jid, name
 }
 
