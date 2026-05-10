@@ -328,6 +328,11 @@ func readChats(ctx context.Context, path, sourceRoot string, names map[string]st
 		return nil, nil, nil, nil, 0, err
 	}
 	defer closeFn()
+	profileNames, err := readProfilePushNameRows(ctx, db)
+	if err != nil {
+		return nil, nil, nil, nil, 0, err
+	}
+	mergeMissingNames(names, profileNames)
 	chats, err := readChatRows(ctx, db)
 	if err != nil {
 		return nil, nil, nil, nil, 0, err
@@ -345,6 +350,36 @@ func readChats(ctx context.Context, path, sourceRoot string, names map[string]st
 		return nil, nil, nil, nil, 0, err
 	}
 	return chats, groups, participants, messages, mediaCount, nil
+}
+
+func readProfilePushNameRows(ctx context.Context, db *sql.DB) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `select coalesce(ZJID,''), coalesce(ZPUSHNAME,'') from ZWAPROFILEPUSHNAME`)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table: ZWAPROFILEPUSHNAME") {
+			return map[string]string{}, nil
+		}
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	names := map[string]string{}
+	for rows.Next() {
+		var jid, name string
+		if err := rows.Scan(&jid, &name); err != nil {
+			return nil, err
+		}
+		if jid != "" && name != "" {
+			names[jid] = name
+		}
+	}
+	return names, rows.Err()
+}
+
+func mergeMissingNames(dst, src map[string]string) {
+	for jid, name := range src {
+		if strings.TrimSpace(dst[jid]) == "" {
+			dst[jid] = name
+		}
+	}
 }
 
 func readChatRows(ctx context.Context, db *sql.DB) ([]store.Chat, error) {
@@ -561,8 +596,17 @@ func sender(fromMe bool, chatJID, fromJID, toJID, pushName, memberJID, memberNam
 		return firstNonEmpty(toJID), "me"
 	}
 	jid := firstNonEmpty(memberJID, fromJID, chatJID)
-	name := firstNonEmpty(memberName, memberFirst, pushName, names[jid], names[strings.TrimSuffix(jid, "@lid")], jid)
+	name := firstNonEmpty(memberName, resolvedName(jid, names), memberFirst, pushName, jid)
 	return jid, name
+}
+
+func resolvedName(jid string, names map[string]string) string {
+	for _, key := range []string{jid, strings.TrimSuffix(jid, "@lid")} {
+		if name := strings.TrimSpace(names[key]); name != "" && name != key && name != jid {
+			return name
+		}
+	}
+	return ""
 }
 
 func chatKind(jid string, raw int) string {

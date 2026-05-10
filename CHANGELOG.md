@@ -6,6 +6,12 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Improve WhatsApp Desktop group sender-name resolution with profile push names
+  while preserving readable message-level push-name fallbacks (#7, thanks
+  @michalparkola).
+
 ## [0.2.4] - 2026-05-08
 
 ### Fixed
