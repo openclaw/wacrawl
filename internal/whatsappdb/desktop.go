@@ -355,8 +355,10 @@ func readChats(ctx context.Context, path, sourceRoot string, names map[string]st
 func readProfilePushNameRows(ctx context.Context, db *sql.DB) (map[string]string, error) {
 	rows, err := db.QueryContext(ctx, `select coalesce(ZJID,''), coalesce(ZPUSHNAME,'') from ZWAPROFILEPUSHNAME`)
 	if err != nil {
-		// Older or fixture databases may not have this table.
-		return map[string]string{}, nil
+		if strings.Contains(err.Error(), "no such table: ZWAPROFILEPUSHNAME") {
+			return map[string]string{}, nil
+		}
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	names := map[string]string{}
@@ -594,8 +596,17 @@ func sender(fromMe bool, chatJID, fromJID, toJID, pushName, memberJID, memberNam
 		return firstNonEmpty(toJID), "me"
 	}
 	jid := firstNonEmpty(memberJID, fromJID, chatJID)
-	name := firstNonEmpty(memberName, names[jid], names[strings.TrimSuffix(jid, "@lid")], memberFirst, pushName, jid)
+	name := firstNonEmpty(memberName, resolvedName(jid, names), memberFirst, pushName, jid)
 	return jid, name
+}
+
+func resolvedName(jid string, names map[string]string) string {
+	for _, key := range []string{jid, strings.TrimSuffix(jid, "@lid")} {
+		if name := strings.TrimSpace(names[key]); name != "" && name != key && name != jid {
+			return name
+		}
+	}
+	return ""
 }
 
 func chatKind(jid string, raw int) string {

@@ -178,6 +178,15 @@ insert into ZWAMESSAGE values (5, 2, 2, null, 'profile-name', 0, 700000004, 'pro
 	}
 }
 
+func TestSenderSkipsResolvedJIDFallback(t *testing.T) {
+	jid, name := sender(false, "123@g.us", "444@s.whatsapp.net", "", "Readable Push", "", "", "", map[string]string{
+		"444@s.whatsapp.net": "444@s.whatsapp.net",
+	})
+	if jid != "444@s.whatsapp.net" || name != "Readable Push" {
+		t.Fatalf("sender used JID fallback before readable push name: jid=%q name=%q", jid, name)
+	}
+}
+
 func TestImportDesktopCopyMedia(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()
@@ -388,6 +397,19 @@ func TestExtractReportsBrokenChatSchema(t *testing.T) {
 	defer func() { _ = os.RemoveAll(snap.Root) }()
 	if _, err := Extract(ctx, snap); err == nil {
 		t.Fatal("expected broken schema error")
+	}
+}
+
+func TestReadProfilePushNamesReportsBrokenOptionalSchema(t *testing.T) {
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	mustExec(t, db, `create table ZWAPROFILEPUSHNAME (Z_PK integer primary key);`)
+	if _, err := readProfilePushNameRows(ctx, db); err == nil {
+		t.Fatal("expected broken profile push name schema error")
 	}
 }
 
