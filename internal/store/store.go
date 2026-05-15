@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/steipete/wacrawl/internal/store/storedb"
 	_ "modernc.org/sqlite"
 )
 
@@ -17,6 +18,7 @@ const schemaVersion = 1
 
 type Store struct {
 	db   *sql.DB
+	q    *storedb.Queries
 	path string
 }
 
@@ -150,7 +152,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
-	s := &Store{db: db, path: path}
+	s := &Store{db: db, q: storedb.New(db), path: path}
 	if err := s.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -254,40 +256,46 @@ func (s *Store) ReplaceAll(ctx context.Context, stats ImportStats, contacts []Co
 
 func (s *Store) Status(ctx context.Context) (Status, error) {
 	out := Status{DBPath: s.path}
-	counts := []struct {
-		dst *int
-		q   string
-	}{
-		{&out.Chats, "select count(*) from chats"},
-		{&out.UnreadChats, "select count(*) from chats where unread_count > 0"},
-		{&out.UnreadMessages, "select coalesce(sum(unread_count), 0) from chats"},
-		{&out.Contacts, "select count(*) from contacts"},
-		{&out.Groups, "select count(*) from groups"},
-		{&out.Participants, "select count(*) from group_participants"},
-		{&out.Messages, "select count(*) from messages"},
-		{&out.MediaMessages, "select count(*) from messages where media_type <> '' or media_path <> '' or media_url <> ''"},
-	}
-	for _, c := range counts {
-		if err := s.db.QueryRowContext(ctx, c.q).Scan(c.dst); err != nil {
-			return out, err
-		}
-	}
-	var oldest, newest sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `select min(ts), max(ts) from messages`).Scan(&oldest, &newest); err != nil {
+	var err error
+	if out.Chats, err = countInt(ctx, s.q.CountChats); err != nil {
 		return out, err
 	}
-	if oldest.Valid && oldest.Int64 > 0 {
-		out.OldestMessage = time.Unix(oldest.Int64, 0).UTC()
+	if out.UnreadChats, err = countInt(ctx, s.q.CountUnreadChats); err != nil {
+		return out, err
 	}
-	if newest.Valid && newest.Int64 > 0 {
-		out.NewestMessage = time.Unix(newest.Int64, 0).UTC()
+	if out.UnreadMessages, err = countInt(ctx, s.q.CountUnreadMessages); err != nil {
+		return out, err
 	}
-	var lastImport string
-	_ = s.db.QueryRowContext(ctx, `select value from sync_state where key='last_import_at'`).Scan(&lastImport)
+	if out.Contacts, err = countInt(ctx, s.q.CountContacts); err != nil {
+		return out, err
+	}
+	if out.Groups, err = countInt(ctx, s.q.CountGroups); err != nil {
+		return out, err
+	}
+	if out.Participants, err = countInt(ctx, s.q.CountParticipants); err != nil {
+		return out, err
+	}
+	if out.Messages, err = countInt(ctx, s.q.CountMessages); err != nil {
+		return out, err
+	}
+	if out.MediaMessages, err = countInt(ctx, s.q.CountMediaMessages); err != nil {
+		return out, err
+	}
+	bounds, err := s.q.GetMessageTimeBounds(ctx)
+	if err != nil {
+		return out, err
+	}
+	if bounds.OldestTs > 0 {
+		out.OldestMessage = time.Unix(bounds.OldestTs, 0).UTC()
+	}
+	if bounds.NewestTs > 0 {
+		out.NewestMessage = time.Unix(bounds.NewestTs, 0).UTC()
+	}
+	lastImport, _ := s.q.GetSyncState(ctx, "last_import_at")
 	if t, err := time.Parse(time.RFC3339Nano, lastImport); err == nil {
 		out.LastImportAt = t
 	}
-	_ = s.db.QueryRowContext(ctx, `select value from sync_state where key='source_path'`).Scan(&out.LastSource)
+	out.LastSource, _ = s.q.GetSyncState(ctx, "source_path")
 	return out, nil
 }
 
@@ -303,30 +311,26 @@ func (s *Store) listChats(ctx context.Context, filter ChatFilter) ([]Chat, error
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
-	where := ""
 	if filter.OnlyUnread {
-		where = "where c.unread_count > 0"
+		rows, err := s.q.ListUnreadChats(ctx, int64(filter.Limit))
+		if err != nil {
+			return nil, err
+		}
+		out := make([]Chat, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, unreadChatFromRow(row))
+		}
+		return out, nil
 	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`select c.jid,c.kind,c.name,c.last_message_at,c.unread_count,c.archived,c.removed,c.hidden,c.raw_session_type,count(m.rowid) from chats c left join messages m on m.chat_jid=c.jid %s group by c.jid order by c.last_message_at desc limit ?`, where), filter.Limit)
+	rows, err := s.q.ListChats(ctx, int64(filter.Limit))
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Chat
-	for rows.Next() {
-		var c Chat
-		var ts int64
-		var archived, removed, hidden int
-		if err := rows.Scan(&c.JID, &c.Kind, &c.Name, &ts, &c.UnreadCount, &archived, &removed, &hidden, &c.RawSessionType, &c.MessageCount); err != nil {
-			return nil, err
-		}
-		c.LastMessageAt = fromUnix(ts)
-		c.Archived = archived != 0
-		c.Removed = removed != 0
-		c.Hidden = hidden != 0
-		out = append(out, c)
+	out := make([]Chat, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, chatFromRow(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) Messages(ctx context.Context, filter MessageFilter) ([]Message, error) {
@@ -432,6 +436,44 @@ func fromUnix(v int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(v, 0).UTC()
+}
+
+func countInt(ctx context.Context, count func(context.Context) (int64, error)) (int, error) {
+	v, err := count(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return int(v), nil
+}
+
+func chatFromRow(row storedb.ListChatsRow) Chat {
+	return Chat{
+		JID:            row.Jid,
+		Kind:           row.Kind,
+		Name:           row.Name,
+		LastMessageAt:  fromUnix(row.LastMessageAt),
+		UnreadCount:    int(row.UnreadCount),
+		Archived:       row.Archived != 0,
+		Removed:        row.Removed != 0,
+		Hidden:         row.Hidden != 0,
+		RawSessionType: int(row.RawSessionType),
+		MessageCount:   int(row.MessageCount),
+	}
+}
+
+func unreadChatFromRow(row storedb.ListUnreadChatsRow) Chat {
+	return Chat{
+		JID:            row.Jid,
+		Kind:           row.Kind,
+		Name:           row.Name,
+		LastMessageAt:  fromUnix(row.LastMessageAt),
+		UnreadCount:    int(row.UnreadCount),
+		Archived:       row.Archived != 0,
+		Removed:        row.Removed != 0,
+		Hidden:         row.Hidden != 0,
+		RawSessionType: int(row.RawSessionType),
+		MessageCount:   int(row.MessageCount),
+	}
 }
 
 func rollback(tx *sql.Tx) {

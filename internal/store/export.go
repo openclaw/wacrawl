@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/steipete/wacrawl/internal/store/storedb"
 )
 
 type SnapshotData struct {
@@ -67,84 +69,51 @@ func (s *Store) ImportSnapshot(ctx context.Context, data SnapshotData, sourcePat
 }
 
 func (s *Store) exportContacts(ctx context.Context) ([]Contact, error) {
-	rows, err := s.db.QueryContext(ctx, `select jid, phone, full_name, first_name, last_name, business_name, username, lid, about_text, updated_at from contacts order by jid`)
+	rows, err := s.q.ExportContacts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Contact
-	for rows.Next() {
-		var c Contact
-		var updatedAt int64
-		if err := rows.Scan(&c.JID, &c.Phone, &c.FullName, &c.FirstName, &c.LastName, &c.BusinessName, &c.Username, &c.LID, &c.AboutText, &updatedAt); err != nil {
-			return nil, err
-		}
-		c.UpdatedAt = fromUnix(updatedAt)
-		out = append(out, c)
+	out := make([]Contact, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, contactFromRow(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) exportChats(ctx context.Context) ([]Chat, error) {
-	rows, err := s.db.QueryContext(ctx, `select jid, kind, name, last_message_at, unread_count, archived, removed, hidden, raw_session_type from chats order by jid`)
+	rows, err := s.q.ExportChats(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Chat
-	for rows.Next() {
-		var c Chat
-		var lastMessageAt int64
-		var archived, removed, hidden int
-		if err := rows.Scan(&c.JID, &c.Kind, &c.Name, &lastMessageAt, &c.UnreadCount, &archived, &removed, &hidden, &c.RawSessionType); err != nil {
-			return nil, err
-		}
-		c.LastMessageAt = fromUnix(lastMessageAt)
-		c.Archived = archived != 0
-		c.Removed = removed != 0
-		c.Hidden = hidden != 0
-		out = append(out, c)
+	out := make([]Chat, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, exportChatFromRow(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) exportGroups(ctx context.Context) ([]Group, error) {
-	rows, err := s.db.QueryContext(ctx, `select jid, name, owner_jid, created_at from groups order by jid`)
+	rows, err := s.q.ExportGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []Group
-	for rows.Next() {
-		var g Group
-		var createdAt int64
-		if err := rows.Scan(&g.JID, &g.Name, &g.OwnerJID, &createdAt); err != nil {
-			return nil, err
-		}
-		g.CreatedAt = fromUnix(createdAt)
-		out = append(out, g)
+	out := make([]Group, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, groupFromRow(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) exportParticipants(ctx context.Context) ([]GroupParticipant, error) {
-	rows, err := s.db.QueryContext(ctx, `select group_jid, user_jid, contact_name, first_name, is_admin, is_active from group_participants order by group_jid, user_jid`)
+	rows, err := s.q.ExportParticipants(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	var out []GroupParticipant
-	for rows.Next() {
-		var p GroupParticipant
-		var isAdmin, isActive int
-		if err := rows.Scan(&p.GroupJID, &p.UserJID, &p.ContactName, &p.FirstName, &isAdmin, &isActive); err != nil {
-			return nil, err
-		}
-		p.IsAdmin = isAdmin != 0
-		p.IsActive = isActive != 0
-		out = append(out, p)
+	out := make([]GroupParticipant, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, participantFromRow(row))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (d SnapshotData) Validate() error {
@@ -159,4 +128,53 @@ func (d SnapshotData) Validate() error {
 		seen[message.SourcePK] = struct{}{}
 	}
 	return nil
+}
+
+func contactFromRow(row storedb.ExportContactsRow) Contact {
+	return Contact{
+		JID:          row.Jid,
+		Phone:        row.Phone,
+		FullName:     row.FullName,
+		FirstName:    row.FirstName,
+		LastName:     row.LastName,
+		BusinessName: row.BusinessName,
+		Username:     row.Username,
+		LID:          row.Lid,
+		AboutText:    row.AboutText,
+		UpdatedAt:    fromUnix(row.UpdatedAt),
+	}
+}
+
+func exportChatFromRow(row storedb.ExportChatsRow) Chat {
+	return Chat{
+		JID:            row.Jid,
+		Kind:           row.Kind,
+		Name:           row.Name,
+		LastMessageAt:  fromUnix(row.LastMessageAt),
+		UnreadCount:    int(row.UnreadCount),
+		Archived:       row.Archived != 0,
+		Removed:        row.Removed != 0,
+		Hidden:         row.Hidden != 0,
+		RawSessionType: int(row.RawSessionType),
+	}
+}
+
+func groupFromRow(row storedb.ExportGroupsRow) Group {
+	return Group{
+		JID:       row.Jid,
+		Name:      row.Name,
+		OwnerJID:  row.OwnerJid,
+		CreatedAt: fromUnix(row.CreatedAt),
+	}
+}
+
+func participantFromRow(row storedb.ExportParticipantsRow) GroupParticipant {
+	return GroupParticipant{
+		GroupJID:    row.GroupJid,
+		UserJID:     row.UserJid,
+		ContactName: row.ContactName,
+		FirstName:   row.FirstName,
+		IsAdmin:     row.IsAdmin != 0,
+		IsActive:    row.IsActive != 0,
+	}
 }
