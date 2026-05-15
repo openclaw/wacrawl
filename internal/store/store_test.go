@@ -176,3 +176,57 @@ func TestReplaceAllDuplicateSourcePKFails(t *testing.T) {
 		t.Fatalf("failed replace should roll back, got %+v", status)
 	}
 }
+
+func TestImportSnapshotRefreshesFTS(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	base := SnapshotData{
+		Chats: []Chat{{JID: "chat", Kind: "dm", Name: "Chat", LastMessageAt: now}},
+		Messages: []Message{{
+			SourcePK:  1,
+			ChatJID:   "chat",
+			ChatName:  "Chat",
+			MessageID: "a",
+			Timestamp: now,
+			Text:      "old import text",
+			RawType:   0,
+		}},
+	}
+	if err := st.ImportSnapshot(ctx, base, "first", now); err != nil {
+		t.Fatal(err)
+	}
+	results, err := st.Search(ctx, MessageFilter{Query: "old", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected old FTS result, got %d", len(results))
+	}
+
+	updated := base
+	updated.Messages[0].Text = "new import text"
+	updated.Messages[0].MediaTitle = "fresh media title"
+	if err := st.ImportSnapshot(ctx, updated, "second", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	results, err = st.Search(ctx, MessageFilter{Query: "old", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected old FTS text to be removed, got %+v", results)
+	}
+	results, err = st.Search(ctx, MessageFilter{Query: "fresh", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].MessageID != "a" {
+		t.Fatalf("expected updated media title FTS result, got %+v", results)
+	}
+}

@@ -191,51 +191,109 @@ func (s *Store) ReplaceAll(ctx context.Context, stats ImportStats, contacts []Co
 		return err
 	}
 	defer rollback(tx)
+	q := s.q.WithTx(tx)
 
-	for _, q := range []string{
-		"delete from messages_fts",
-		"delete from messages",
-		"delete from group_participants",
-		"delete from groups",
-		"delete from chats",
-		"delete from contacts",
-		"delete from sync_state",
+	for _, deleteQuery := range []func(context.Context) error{
+		q.DeleteMessagesFTS,
+		q.DeleteMessages,
+		q.DeleteGroupParticipants,
+		q.DeleteGroups,
+		q.DeleteChats,
+		q.DeleteContacts,
+		q.DeleteSyncState,
 	} {
-		if _, err := tx.ExecContext(ctx, q); err != nil {
+		if err := deleteQuery(ctx); err != nil {
 			return err
 		}
 	}
 	for _, c := range contacts {
-		if _, err := tx.ExecContext(ctx, `insert into contacts(jid, phone, full_name, first_name, last_name, business_name, username, lid, about_text, updated_at) values(?,?,?,?,?,?,?,?,?,?)`,
-			c.JID, c.Phone, c.FullName, c.FirstName, c.LastName, c.BusinessName, c.Username, c.LID, c.AboutText, unix(c.UpdatedAt)); err != nil {
+		err := q.InsertContact(ctx, storedb.InsertContactParams{
+			Jid:          c.JID,
+			Phone:        nullString(c.Phone),
+			FullName:     nullString(c.FullName),
+			FirstName:    nullString(c.FirstName),
+			LastName:     nullString(c.LastName),
+			BusinessName: nullString(c.BusinessName),
+			Username:     nullString(c.Username),
+			Lid:          nullString(c.LID),
+			AboutText:    nullString(c.AboutText),
+			UpdatedAt:    nullInt64(unix(c.UpdatedAt)),
+		})
+		if err != nil {
 			return err
 		}
 	}
 	for _, c := range chats {
-		if _, err := tx.ExecContext(ctx, `insert into chats(jid, kind, name, last_message_at, unread_count, archived, removed, hidden, raw_session_type) values(?,?,?,?,?,?,?,?,?)`,
-			c.JID, c.Kind, c.Name, unix(c.LastMessageAt), c.UnreadCount, boolInt(c.Archived), boolInt(c.Removed), boolInt(c.Hidden), c.RawSessionType); err != nil {
+		err := q.InsertChat(ctx, storedb.InsertChatParams{
+			Jid:            c.JID,
+			Kind:           c.Kind,
+			Name:           nullString(c.Name),
+			LastMessageAt:  nullInt64(unix(c.LastMessageAt)),
+			UnreadCount:    int64(c.UnreadCount),
+			Archived:       int64(boolInt(c.Archived)),
+			Removed:        int64(boolInt(c.Removed)),
+			Hidden:         int64(boolInt(c.Hidden)),
+			RawSessionType: int64(c.RawSessionType),
+		})
+		if err != nil {
 			return err
 		}
 	}
 	for _, g := range groups {
-		if _, err := tx.ExecContext(ctx, `insert into groups(jid, name, owner_jid, created_at) values(?,?,?,?)`,
-			g.JID, g.Name, g.OwnerJID, unix(g.CreatedAt)); err != nil {
+		err := q.InsertGroup(ctx, storedb.InsertGroupParams{
+			Jid:       g.JID,
+			Name:      nullString(g.Name),
+			OwnerJid:  nullString(g.OwnerJID),
+			CreatedAt: nullInt64(unix(g.CreatedAt)),
+		})
+		if err != nil {
 			return err
 		}
 	}
 	for _, p := range participants {
-		if _, err := tx.ExecContext(ctx, `insert into group_participants(group_jid, user_jid, contact_name, first_name, is_admin, is_active) values(?,?,?,?,?,?)`,
-			p.GroupJID, p.UserJID, p.ContactName, p.FirstName, boolInt(p.IsAdmin), boolInt(p.IsActive)); err != nil {
+		err := q.InsertParticipant(ctx, storedb.InsertParticipantParams{
+			GroupJid:    p.GroupJID,
+			UserJid:     p.UserJID,
+			ContactName: nullString(p.ContactName),
+			FirstName:   nullString(p.FirstName),
+			IsAdmin:     int64(boolInt(p.IsAdmin)),
+			IsActive:    int64(boolInt(p.IsActive)),
+		})
+		if err != nil {
 			return err
 		}
 	}
 	for _, m := range messages {
-		if _, err := tx.ExecContext(ctx, `insert into messages(source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			m.SourcePK, m.ChatJID, m.ChatName, m.MessageID, m.SenderJID, m.SenderName, unix(m.Timestamp), boolInt(m.FromMe), m.Text, m.RawType, m.MessageType, m.MediaType, m.MediaTitle, m.MediaPath, m.MediaURL, m.MediaSize, boolInt(m.Starred)); err != nil {
+		err := q.InsertMessage(ctx, storedb.InsertMessageParams{
+			SourcePk:    m.SourcePK,
+			ChatJid:     m.ChatJID,
+			ChatName:    nullString(m.ChatName),
+			MsgID:       m.MessageID,
+			SenderJid:   nullString(m.SenderJID),
+			SenderName:  nullString(m.SenderName),
+			Ts:          unix(m.Timestamp),
+			FromMe:      int64(boolInt(m.FromMe)),
+			Text:        nullString(m.Text),
+			RawType:     int64(m.RawType),
+			MessageType: nullString(m.MessageType),
+			MediaType:   nullString(m.MediaType),
+			MediaTitle:  nullString(m.MediaTitle),
+			MediaPath:   nullString(m.MediaPath),
+			MediaUrl:    nullString(m.MediaURL),
+			MediaSize:   nullInt64(m.MediaSize),
+			Starred:     int64(boolInt(m.Starred)),
+		})
+		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `insert into messages_fts(rowid, text, chat, sender, media) values((select rowid from messages where source_pk=?), ?, ?, ?, ?)`,
-			m.SourcePK, strings.TrimSpace(m.Text+" "+m.MediaTitle), m.ChatName, m.SenderName, m.MediaType); err != nil {
+		err = q.InsertMessageFTS(ctx, storedb.InsertMessageFTSParams{
+			SourcePk: m.SourcePK,
+			Text:     nullString(strings.TrimSpace(m.Text + " " + m.MediaTitle)),
+			Chat:     nullString(m.ChatName),
+			Sender:   nullString(m.SenderName),
+			Media:    nullString(m.MediaType),
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -247,7 +305,12 @@ func (s *Store) ReplaceAll(ctx context.Context, stats ImportStats, contacts []Co
 		"last_import_at": now.Format(time.RFC3339Nano),
 		"source_path":    stats.SourcePath,
 	} {
-		if _, err := tx.ExecContext(ctx, `insert into sync_state(key, value, updated_at) values(?,?,?)`, key, value, unix(now)); err != nil {
+		err := q.InsertSyncState(ctx, storedb.InsertSyncStateParams{
+			Key:       key,
+			Value:     value,
+			UpdatedAt: unix(now),
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -436,6 +499,14 @@ func fromUnix(v int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(v, 0).UTC()
+}
+
+func nullString(v string) sql.NullString {
+	return sql.NullString{String: v, Valid: true}
+}
+
+func nullInt64(v int64) sql.NullInt64 {
+	return sql.NullInt64{Int64: v, Valid: true}
 }
 
 func countInt(ctx context.Context, count func(context.Context) (int64, error)) (int, error) {
