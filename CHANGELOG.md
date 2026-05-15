@@ -1,16 +1,14 @@
 # Changelog
 
-All notable changes to this project are documented here.
+## [0.2.5] - 2026-05-15
 
-The format follows Keep a Changelog, and this project uses Semantic Versioning.
+### Changed
 
-## [Unreleased]
+- Move stable archive-store SQLite reads and writes to sqlc-generated wrappers while keeping runtime schema setup, dynamic message/search filters, and WhatsApp Desktop source readers handwritten.
 
 ### Fixed
 
-- Improve WhatsApp Desktop group sender-name resolution with profile push names
-  while preserving readable message-level push-name fallbacks (#7, thanks
-  @michalparkola).
+- Improve WhatsApp Desktop group sender-name resolution with profile push names while preserving readable message-level push-name fallbacks (#7, thanks @michalparkola).
 
 ## [0.2.4] - 2026-05-08
 
