@@ -1,3 +1,5 @@
+![wacrawl banner](docs/assets/readme-banner.jpg)
+
 # 🧾 wacrawl
 
 WhatsApp archaeology with encrypted receipts.
