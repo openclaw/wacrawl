@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +39,7 @@ func TestRunEndToEnd(t *testing.T) {
 		{"import copy media", []string{"--db", dbPath, "--source", source, "import", "--copy-media"}, "media_copied=1"},
 		{"status", []string{"--db", dbPath, "status"}, "unread_messages=2"},
 		{"chats", []string{"--db", dbPath, "chats", "--limit", "5"}, "UNREAD"},
+		{"contacts export", []string{"--db", dbPath, "--json", "--sync", "never", "contacts", "export"}, `"display_name": "Alice Contact"`},
 		{"chats unread", []string{"--db", dbPath, "chats", "--unread", "--limit", "5"}, "Launch Group"},
 		{"unread", []string{"--db", dbPath, "unread", "--limit", "5"}, "Launch Group"},
 		{"messages", []string{"--db", dbPath, "messages", "--chat", "123@g.us", "--asc"}, "launch now"},
@@ -53,6 +56,101 @@ func TestRunEndToEnd(t *testing.T) {
 				t.Fatalf("stdout missing %q:\n%s", tc.want, stdout.String())
 			}
 		})
+	}
+}
+
+func TestContactsExportUsesContractShapeAndSkipsUnsafeNames(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	contacts := []store.Contact{
+		{JID: "safe@s.whatsapp.net", Phone: "+15550100", FullName: "Safe Person"},
+		{JID: "business@s.whatsapp.net", Phone: "+15550101", BusinessName: "Business Name"},
+		{JID: "first-last@s.whatsapp.net", Phone: "+15550102", FirstName: "First", LastName: "Last"},
+		{JID: "username@s.whatsapp.net", Phone: "+15550103", Username: "handle", FullName: "@handle"},
+		{JID: "phone@s.whatsapp.net", Phone: "+15550104", FullName: "+15550104"},
+		{JID: "jid@s.whatsapp.net", Phone: "+15550105", FullName: "jid@s.whatsapp.net"},
+		{JID: "blank@s.whatsapp.net", Phone: "+15550106"},
+		{JID: "missing-phone@s.whatsapp.net", FullName: "Missing Phone"},
+	}
+	if err := st.ReplaceAll(ctx, store.ImportStats{}, contacts, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run(ctx, []string{"--db", dbPath, "--json", "--sync", "always", "contacts", "export"}, &stdout, &stderr); err != nil {
+		t.Fatalf("contacts export: %v stderr=%s", err, stderr.String())
+	}
+	var payload struct {
+		Contacts []struct {
+			DisplayName  string   `json:"display_name"`
+			PhoneNumbers []string `json:"phone_numbers"`
+			JID          string   `json:"jid"`
+			Username     string   `json:"username"`
+		} `json:"contacts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("json = %s err=%v", stdout.String(), err)
+	}
+	assertContactExportKeys(t, stdout.Bytes())
+	gotNames := make([]string, 0, len(payload.Contacts))
+	for _, contact := range payload.Contacts {
+		gotNames = append(gotNames, contact.DisplayName)
+		if contact.JID != "" || contact.Username != "" {
+			t.Fatalf("leaked source fields = %#v", contact)
+		}
+		if len(contact.PhoneNumbers) != 1 {
+			t.Fatalf("bad phone numbers = %#v", contact)
+		}
+	}
+	wantNames := []string{"Business Name", "First Last", "Safe Person"}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("names = %#v, want %#v", gotNames, wantNames)
+	}
+}
+
+func assertContactExportKeys(t *testing.T, data []byte) {
+	t.Helper()
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+	contactsJSON, ok := root["contacts"]
+	if !ok || len(root) != 1 {
+		t.Fatalf("root keys = %#v, want only contacts", root)
+	}
+	var contacts []map[string]json.RawMessage
+	if err := json.Unmarshal(contactsJSON, &contacts); err != nil {
+		t.Fatal(err)
+	}
+	for _, contact := range contacts {
+		if _, ok := contact["display_name"]; !ok {
+			t.Fatalf("contact keys = %#v, missing display_name", contact)
+		}
+		if _, ok := contact["phone_numbers"]; !ok {
+			t.Fatalf("contact keys = %#v, missing phone_numbers", contact)
+		}
+		if len(contact) != 2 {
+			t.Fatalf("contact keys = %#v, want only display_name and phone_numbers", contact)
+		}
+	}
+}
+
+func TestMetadataAdvertisesContactExport(t *testing.T) {
+	manifest := controlManifest()
+	command, ok := manifest.Commands["contact-export"]
+	if !ok {
+		t.Fatalf("commands = %#v", manifest.Commands)
+	}
+	if command.Mutates || !command.JSON {
+		t.Fatalf("contact-export command = %#v", command)
+	}
+	want := []string{"wacrawl", "--json", "--sync", "never", "contacts", "export"}
+	if !reflect.DeepEqual(command.Argv, want) {
+		t.Fatalf("argv = %#v, want %#v", command.Argv, want)
 	}
 }
 

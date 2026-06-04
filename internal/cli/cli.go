@@ -12,6 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/steipete/wacrawl/internal/backup"
 	"github.com/steipete/wacrawl/internal/store"
@@ -97,6 +98,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.runStatus(ctx, rest[1:])
 	case "chats":
 		return a.runChats(ctx, rest[1:])
+	case "contacts":
+		return a.runContacts(ctx, rest[1:])
 	case "unread":
 		return a.runUnread(ctx, rest[1:])
 	case "messages":
@@ -198,6 +201,107 @@ func (a *app) runImport(ctx context.Context, command string, args []string) erro
 		}
 		return a.print(stats)
 	})
+}
+
+type contactExport struct {
+	Contacts []exportedContact `json:"contacts"`
+}
+
+type exportedContact struct {
+	DisplayName  string   `json:"display_name"`
+	PhoneNumbers []string `json:"phone_numbers"`
+}
+
+func (a *app) runContacts(ctx context.Context, args []string) error {
+	if len(args) == 0 || args[0] != "export" {
+		return usageErr(errors.New("contacts supports export only"))
+	}
+	fs := flag.NewFlagSet("contacts export", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printCommandUsage(a.stdout, "contacts", "export")
+			return nil
+		}
+		return usageErr(err)
+	}
+	if fs.NArg() != 0 {
+		return usageErr(errors.New("contacts export takes no arguments"))
+	}
+	return a.withStore(ctx, func(st *store.Store) error {
+		contacts, err := st.Contacts(ctx)
+		if err != nil {
+			return err
+		}
+		return a.print(contactExport{Contacts: exportContacts(contacts)})
+	})
+}
+
+func exportContacts(contacts []store.Contact) []exportedContact {
+	out := make([]exportedContact, 0, len(contacts))
+	for _, contact := range contacts {
+		name := contactDisplayName(contact)
+		phone := strings.TrimSpace(contact.Phone)
+		if name == "" || phone == "" {
+			continue
+		}
+		out = append(out, exportedContact{DisplayName: name, PhoneNumbers: []string{phone}})
+	}
+	return out
+}
+
+func contactDisplayName(contact store.Contact) string {
+	for _, name := range []string{
+		contact.FullName,
+		contact.BusinessName,
+		strings.TrimSpace(contact.FirstName + " " + contact.LastName),
+	} {
+		if cleaned := cleanContactName(name, contact); cleaned != "" {
+			return cleaned
+		}
+	}
+	return ""
+}
+
+func cleanContactName(name string, contact store.Contact) string {
+	name = strings.TrimSpace(name)
+	switch {
+	case name == "":
+		return ""
+	case name == strings.TrimSpace(contact.Phone):
+		return ""
+	case name == strings.TrimSpace(contact.JID):
+		return ""
+	case name == strings.TrimSpace(contact.Username):
+		return ""
+	case name == strings.TrimSpace(contact.LID):
+		return ""
+	case strings.HasPrefix(name, "@"):
+		return ""
+	case looksLikePhone(name):
+		return ""
+	default:
+		return name
+	}
+}
+
+func looksLikePhone(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	digits := 0
+	other := 0
+	for _, r := range value {
+		switch {
+		case unicode.IsDigit(r):
+			digits++
+		case strings.ContainsRune(" +()-.", r):
+		default:
+			other++
+		}
+	}
+	return digits >= 5 && other == 0
 }
 
 func (a *app) runChats(ctx context.Context, args []string) error {
@@ -477,6 +581,7 @@ Commands:
   sync        Alias for import.
   status      Show archive status.
   chats       List chats.
+  contacts    Export archived contacts for clawdex.
   unread      List chats with unread messages.
   messages    List archived messages.
   search      Search archived messages.
@@ -497,6 +602,7 @@ Examples:
   wacrawl doctor
   wacrawl sync
   wacrawl unread --limit 20
+  wacrawl --json --sync never contacts export
   wacrawl --json search "invoice" --from-them --after 2026-01-01
   wacrawl help messages
 `)
@@ -567,6 +673,15 @@ Examples:
   wacrawl chats --limit 20
   wacrawl chats --unread
   wacrawl --json chats --limit 100
+`)
+	case "contacts", "contacts export":
+		_, _ = fmt.Fprint(w, `Export archived contacts for clawdex.
+
+Usage:
+  wacrawl --json --sync never contacts export
+
+Examples:
+  wacrawl --json --sync never contacts export
 `)
 	case "unread":
 		_, _ = fmt.Fprint(w, `List chats with unread messages.

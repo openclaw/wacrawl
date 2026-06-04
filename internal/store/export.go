@@ -64,6 +64,10 @@ func (s *Store) ExportAll(ctx context.Context) (SnapshotData, error) {
 	return SnapshotData{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages}, nil
 }
 
+func (s *Store) Contacts(ctx context.Context) ([]Contact, error) {
+	return s.exportContacts(ctx)
+}
+
 func (s *Store) ImportSnapshot(ctx context.Context, data SnapshotData, sourcePath string, finishedAt time.Time) error {
 	return s.ReplaceAll(ctx, data.ImportStats(sourcePath, s.Path(), finishedAt), data.Contacts, data.Chats, data.Groups, data.Participants, data.Messages)
 }

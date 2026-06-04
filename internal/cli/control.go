@@ -19,10 +19,11 @@ func controlManifest() control.Manifest {
 	m.Capabilities = []string{"metadata", "doctor", "status", "sync", "search", "backup"}
 	m.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"whatsapp-desktop", "sqlite", "encrypted-git-backup"}}
 	m.Commands = map[string]control.Command{
-		"doctor": {Title: "Doctor", Argv: []string{"wacrawl", "--json", "doctor"}, JSON: true},
-		"status": {Title: "Status", Argv: []string{"wacrawl", "--json", "--sync", "never", "status"}, JSON: true},
-		"sync":   {Title: "Sync", Argv: []string{"wacrawl", "--json", "sync"}, JSON: true, Mutates: true},
-		"search": {Title: "Search", Argv: []string{"wacrawl", "--json", "--sync", "auto", "search"}, JSON: true},
+		"doctor":         {Title: "Doctor", Argv: []string{"wacrawl", "--json", "doctor"}, JSON: true},
+		"status":         {Title: "Status", Argv: []string{"wacrawl", "--json", "--sync", "never", "status"}, JSON: true},
+		"sync":           {Title: "Sync", Argv: []string{"wacrawl", "--json", "sync"}, JSON: true, Mutates: true},
+		"search":         {Title: "Search", Argv: []string{"wacrawl", "--json", "--sync", "auto", "search"}, JSON: true},
+		"contact-export": {Title: "Export contacts", Argv: []string{"wacrawl", "--json", "--sync", "never", "contacts", "export"}, JSON: true},
 	}
 	return m
 }
