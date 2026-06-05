@@ -87,6 +87,9 @@ func sourceAheadOfArchive(source whatsappdb.Source, status store.Status) bool {
 	if source.MessageRows != 0 && source.MessageRows != status.Messages {
 		return true
 	}
+	if source.ContactRows != 0 && source.ContactRows != status.Contacts {
+		return true
+	}
 	if strings.TrimSpace(source.NewestMessage) == "" {
 		return false
 	}

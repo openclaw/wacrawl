@@ -325,6 +325,26 @@ func TestReadCommandsSyncArchive(t *testing.T) {
 		t.Fatalf("contacts export should report sync before reading, got %q", stderr.String())
 	}
 
+	addDesktopContact(t, source, "333@s.whatsapp.net", "+333", "Charlie Contact")
+	autoDB := filepath.Join(t.TempDir(), "auto-contacts.db")
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", autoDB, "--source", source, "--sync", "always", "--json", "status"}, &stdout, &stderr); err != nil {
+		t.Fatalf("seed contact auto-sync archive: %v stderr=%s", err, stderr.String())
+	}
+	addDesktopContact(t, source, "444@s.whatsapp.net", "+444", "Delta Contact")
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", autoDB, "--source", source, "--sync", "auto", "--sync-max-age", "0s", "--json", "contacts", "export"}, &stdout, &stderr); err != nil {
+		t.Fatalf("contacts export --sync auto error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"display_name": "Delta Contact"`) {
+		t.Fatalf("contacts export should auto-sync contact count drift:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "sync: syncing WhatsApp Desktop snapshot") {
+		t.Fatalf("contacts export should report contact drift sync, got %q", stderr.String())
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	if err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "contacts.db"), "--source", source, "--sync", "never", "--json", "contacts", "export"}, &stdout, &stderr); err != nil {
@@ -332,6 +352,19 @@ func TestReadCommandsSyncArchive(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), `"display_name"`) {
 		t.Fatalf("contacts export should stay archive-only with --sync never:\n%s", stdout.String())
+	}
+}
+
+func addDesktopContact(t *testing.T, dir, jid, phone, name string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "ContactsV2.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`insert into ZWAADDRESSBOOKCONTACT values (?, ?, ?, '', '', '', '', '', '', 700000000)`, jid, phone, name)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
