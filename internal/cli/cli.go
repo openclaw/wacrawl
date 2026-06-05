@@ -678,7 +678,7 @@ Examples:
 		_, _ = fmt.Fprint(w, `Export archived contacts.
 
 Usage:
-  wacrawl --json --sync never contacts export
+  wacrawl [--json] [--sync auto|always|never] contacts export
 
 Examples:
   wacrawl --json --sync never contacts export
