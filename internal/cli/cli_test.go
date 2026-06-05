@@ -69,11 +69,13 @@ func TestContactsExportUsesContractShapeAndSkipsUnsafeNames(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	contacts := []store.Contact{
 		{JID: "safe@s.whatsapp.net", Phone: "+15550100", FullName: "Safe Person"},
+		{JID: "safe-duplicate@s.whatsapp.net", Phone: "+15550100", FullName: "Safe Person"},
 		{JID: "business@s.whatsapp.net", Phone: "+15550101", BusinessName: "Business Name"},
 		{JID: "first-last@s.whatsapp.net", Phone: "+15550102", FirstName: "First", LastName: "Last"},
 		{JID: "username@s.whatsapp.net", Phone: "+15550103", Username: "handle", FullName: "@handle"},
 		{JID: "phone@s.whatsapp.net", Phone: "+15550104", FullName: "+15550104"},
 		{JID: "jid@s.whatsapp.net", Phone: "+15550105", FullName: "jid@s.whatsapp.net"},
+		{JID: "case-jid@s.whatsapp.net", Phone: "+15550107", FullName: "CASE-JID@S.WHATSAPP.NET"},
 		{JID: "blank@s.whatsapp.net", Phone: "+15550106"},
 		{JID: "missing-phone@s.whatsapp.net", FullName: "Missing Phone"},
 	}

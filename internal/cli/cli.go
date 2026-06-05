@@ -239,12 +239,18 @@ func (a *app) runContacts(ctx context.Context, args []string) error {
 
 func exportContacts(contacts []store.Contact) []exportedContact {
 	out := make([]exportedContact, 0, len(contacts))
+	seen := map[string]struct{}{}
 	for _, contact := range contacts {
 		name := contactDisplayName(contact)
 		phone := strings.TrimSpace(contact.Phone)
 		if name == "" || phone == "" {
 			continue
 		}
+		key := name + "\x00" + phone
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		out = append(out, exportedContact{DisplayName: name, PhoneNumbers: []string{phone}})
 	}
 	return out
@@ -268,13 +274,13 @@ func cleanContactName(name string, contact store.Contact) string {
 	switch {
 	case name == "":
 		return ""
-	case name == strings.TrimSpace(contact.Phone):
+	case sameContactText(name, contact.Phone):
 		return ""
-	case name == strings.TrimSpace(contact.JID):
+	case sameContactText(name, contact.JID):
 		return ""
-	case name == strings.TrimSpace(contact.Username):
+	case sameContactText(name, contact.Username):
 		return ""
-	case name == strings.TrimSpace(contact.LID):
+	case sameContactText(name, contact.LID):
 		return ""
 	case strings.HasPrefix(name, "@"):
 		return ""
@@ -283,6 +289,12 @@ func cleanContactName(name string, contact store.Contact) string {
 	default:
 		return name
 	}
+}
+
+func sameContactText(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	return a != "" && b != "" && strings.EqualFold(a, b)
 }
 
 func looksLikePhone(value string) bool {
