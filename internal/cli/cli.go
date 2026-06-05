@@ -228,7 +228,7 @@ func (a *app) runContacts(ctx context.Context, args []string) error {
 	if fs.NArg() != 0 {
 		return usageErr(errors.New("contacts export takes no arguments"))
 	}
-	return a.withStore(ctx, func(st *store.Store) error {
+	return a.withArchiveStore(ctx, func(st *store.Store) error {
 		contacts, err := st.Contacts(ctx)
 		if err != nil {
 			return err
@@ -581,7 +581,7 @@ Commands:
   sync        Alias for import.
   status      Show archive status.
   chats       List chats.
-  contacts    Export archived contacts for clawdex.
+  contacts    Export archived contacts.
   unread      List chats with unread messages.
   messages    List archived messages.
   search      Search archived messages.
@@ -675,7 +675,7 @@ Examples:
   wacrawl --json chats --limit 100
 `)
 	case "contacts", "contacts export":
-		_, _ = fmt.Fprint(w, `Export archived contacts for clawdex.
+		_, _ = fmt.Fprint(w, `Export archived contacts.
 
 Usage:
   wacrawl --json --sync never contacts export

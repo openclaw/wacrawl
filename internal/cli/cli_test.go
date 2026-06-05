@@ -81,7 +81,7 @@ func TestContactsExportUsesContractShapeAndSkipsUnsafeNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if err := Run(ctx, []string{"--db", dbPath, "--json", "--sync", "always", "contacts", "export"}, &stdout, &stderr); err != nil {
+	if err := Run(ctx, []string{"--db", dbPath, "--json", "--sync", "never", "contacts", "export"}, &stdout, &stderr); err != nil {
 		t.Fatalf("contacts export: %v stderr=%s", err, stderr.String())
 	}
 	var payload struct {
@@ -109,6 +109,13 @@ func TestContactsExportUsesContractShapeAndSkipsUnsafeNames(t *testing.T) {
 	wantNames := []string{"Business Name", "First Last", "Safe Person"}
 	if !reflect.DeepEqual(gotNames, wantNames) {
 		t.Fatalf("names = %#v, want %#v", gotNames, wantNames)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err = Run(ctx, []string{"--db", dbPath, "--source", filepath.Join(t.TempDir(), "missing"), "--sync", "always", "contacts", "export"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "source unavailable") {
+		t.Fatalf("expected --sync always to fail without source, got %v", err)
 	}
 }
 
@@ -304,6 +311,27 @@ func TestReadCommandsSyncArchive(t *testing.T) {
 	err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "archive.db"), "--source", filepath.Join(source, "missing"), "--sync", "always", "status"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "source unavailable") {
 		t.Fatalf("expected --sync always to fail without source, got %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "contacts.db"), "--source", source, "--sync", "always", "--json", "contacts", "export"}, &stdout, &stderr); err != nil {
+		t.Fatalf("contacts export --sync always error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"display_name": "Alice Contact"`) {
+		t.Fatalf("contacts export should sync before reading:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "sync: syncing WhatsApp Desktop snapshot") {
+		t.Fatalf("contacts export should report sync before reading, got %q", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "contacts.db"), "--source", source, "--sync", "never", "--json", "contacts", "export"}, &stdout, &stderr); err != nil {
+		t.Fatalf("contacts export --sync never error = %v stderr=%s", err, stderr.String())
+	}
+	if strings.Contains(stdout.String(), `"display_name"`) {
+		t.Fatalf("contacts export should stay archive-only with --sync never:\n%s", stdout.String())
 	}
 }
 
