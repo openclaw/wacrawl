@@ -345,6 +345,20 @@ func TestReadCommandsSyncArchive(t *testing.T) {
 		t.Fatalf("contacts export should report contact drift sync, got %q", stderr.String())
 	}
 
+	updateDesktopContact(t, source, "444@s.whatsapp.net", "+444", "Delta Renamed")
+	markDesktopContactsModified(t, source, time.Now().Add(time.Second))
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", autoDB, "--source", source, "--sync", "auto", "--sync-max-age", "0s", "--json", "contacts", "export"}, &stdout, &stderr); err != nil {
+		t.Fatalf("contacts export --sync auto same-count edit error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"display_name": "Delta Renamed"`) {
+		t.Fatalf("contacts export should auto-sync contact DB mtime drift:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "sync: syncing WhatsApp Desktop snapshot") {
+		t.Fatalf("contacts export should report contact mtime drift sync, got %q", stderr.String())
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	if err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "contacts.db"), "--source", source, "--sync", "never", "--json", "contacts", "export"}, &stdout, &stderr); err != nil {
@@ -364,6 +378,27 @@ func addDesktopContact(t *testing.T, dir, jid, phone, name string) {
 	defer func() { _ = db.Close() }()
 	_, err = db.Exec(`insert into ZWAADDRESSBOOKCONTACT values (?, ?, ?, '', '', '', '', '', '', 700000000)`, jid, phone, name)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func updateDesktopContact(t *testing.T, dir, jid, phone, name string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "ContactsV2.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`update ZWAADDRESSBOOKCONTACT set ZPHONENUMBER = ?, ZFULLNAME = ?, ZLASTUPDATED = 700000100 where ZWHATSAPPID = ?`, phone, name, jid)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func markDesktopContactsModified(t *testing.T, dir string, ts time.Time) {
+	t.Helper()
+	path := filepath.Join(dir, "ContactsV2.sqlite")
+	if err := os.Chtimes(path, ts, ts); err != nil {
 		t.Fatal(err)
 	}
 }

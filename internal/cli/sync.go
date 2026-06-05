@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -90,6 +91,9 @@ func sourceAheadOfArchive(source whatsappdb.Source, status store.Status) bool {
 	if source.ContactRows != 0 && source.ContactRows != status.Contacts {
 		return true
 	}
+	if sqliteTriadModifiedAfter(source.ContactsDB, status.LastImportAt) {
+		return true
+	}
 	if strings.TrimSpace(source.NewestMessage) == "" {
 		return false
 	}
@@ -98,6 +102,22 @@ func sourceAheadOfArchive(source whatsappdb.Source, status store.Status) bool {
 		return false
 	}
 	return sourceNewest.After(status.NewestMessage)
+}
+
+func sqliteTriadModifiedAfter(path string, cutoff time.Time) bool {
+	if strings.TrimSpace(path) == "" || cutoff.IsZero() {
+		return false
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(path + suffix)
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(cutoff) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *app) warnSync(format string, args ...any) {
