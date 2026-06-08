@@ -794,7 +794,14 @@ func appleNullTime(v sql.NullFloat64) time.Time {
 	if !v.Valid || v.Float64 <= 0 {
 		return time.Time{}
 	}
-	return appleTime(v.Float64)
+	t := appleTime(v.Float64)
+	// WhatsApp stores sentinel dates for pseudo-chats like 0@status that convert
+	// to impossible years (e.g. 11001) and break JSON encoding downstream. Treat
+	// anything outside JSON's marshalable year range as unknown.
+	if y := t.Year(); y < 1 || y > 9999 {
+		return time.Time{}
+	}
+	return t
 }
 
 func appleTime(seconds float64) time.Time {
