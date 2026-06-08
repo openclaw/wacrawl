@@ -286,3 +286,41 @@ func TestListChatsClampsOutOfRangePersistedTimestamp(t *testing.T) {
 		}
 	}
 }
+
+// TestStatusClampsOutOfRangeMessageTimestamp covers the status path specifically:
+// OldestMessage/NewestMessage come from GetMessageTimeBounds, a separate path from
+// fromUnix. A pre-fix archive with an out-of-range messages.ts must not break
+// `--json status` with "Time.MarshalJSON: year outside of range [0,9999]".
+func TestStatusClampsOutOfRangeMessageTimestamp(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	poison := time.Unix(284990875200, 0).UTC() // year ~11001 stored as messages.ts
+	chats := []Chat{{JID: "c@s.whatsapp.net", Kind: "dm", Name: "C", LastMessageAt: now}}
+	messages := []Message{{SourcePK: 1, ChatJID: "c@s.whatsapp.net", MessageID: "a", Timestamp: poison, RawType: 0, MessageType: "text"}}
+	stats := ImportStats{DBPath: st.Path(), StartedAt: now, FinishedAt: now}
+	if err := st.ReplaceAll(ctx, stats, nil, chats, nil, nil, messages); err != nil {
+		t.Fatal(err)
+	}
+
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ts := range []struct {
+		name string
+		v    time.Time
+	}{{"OldestMessage", status.OldestMessage}, {"NewestMessage", status.NewestMessage}} {
+		if y := ts.v.Year(); y < 0 || y > 9999 {
+			t.Fatalf("%s year %d is not JSON-marshalable; want clamped to zero", ts.name, y)
+		}
+	}
+	if _, err := json.Marshal(status); err != nil {
+		t.Fatalf("status JSON marshal failed on poisoned messages.ts: %v", err)
+	}
+}

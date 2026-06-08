@@ -348,12 +348,12 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return out, err
 	}
-	if bounds.OldestTs > 0 {
-		out.OldestMessage = time.Unix(bounds.OldestTs, 0).UTC()
-	}
-	if bounds.NewestTs > 0 {
-		out.NewestMessage = time.Unix(bounds.NewestTs, 0).UTC()
-	}
+	// Route message-time bounds through the same JSON-safe conversion as every
+	// other persisted timestamp so a pre-fix out-of-range messages.ts can't break
+	// `--json status`. fromUnix clamps both <= 0 and out-of-range years to zero,
+	// which the omitzero JSON tags then drop.
+	out.OldestMessage = fromUnix(bounds.OldestTs)
+	out.NewestMessage = fromUnix(bounds.NewestTs)
 	lastImport, _ := s.q.GetSyncState(ctx, "last_import_at")
 	if t, err := time.Parse(time.RFC3339Nano, lastImport); err == nil {
 		out.LastImportAt = t
