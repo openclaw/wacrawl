@@ -498,7 +498,15 @@ func fromUnix(v int64) time.Time {
 	if v <= 0 {
 		return time.Time{}
 	}
-	return time.Unix(v, 0).UTC()
+	t := time.Unix(v, 0).UTC()
+	// A persisted timestamp can fall outside JSON's marshalable year range if it
+	// was imported before appleNullTime clamped impossible Apple-epoch sentinels
+	// (e.g. the 0@status pseudo-chat, stored as ~year 11001). Treat such values as
+	// unknown so reads of an already-populated archive don't break --json output.
+	if y := t.Year(); y < 1 || y > 9999 {
+		return time.Time{}
+	}
+	return t
 }
 
 func nullString(v string) sql.NullString {

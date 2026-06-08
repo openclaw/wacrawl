@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -238,5 +239,50 @@ func TestImportSnapshotRefreshesFTS(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].MessageID != "a" {
 		t.Fatalf("expected updated media title FTS result, got %+v", results)
+	}
+}
+
+// TestListChatsClampsOutOfRangePersistedTimestamp covers an archive populated by
+// a pre-fix build, whose chats.last_message_at holds an impossible Apple-epoch
+// sentinel (the 0@status pseudo-chat) stored as out-of-range Unix seconds. The
+// read path must clamp it so --json chats/unread no longer fail with
+// "Time.MarshalJSON: year outside of range [0,9999]" — without requiring a
+// forced re-import.
+func TestListChatsClampsOutOfRangePersistedTimestamp(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	poison := time.Unix(284990875200, 0).UTC() // year ~11001, as stored before the import-time clamp existed
+	stats := ImportStats{DBPath: st.Path(), StartedAt: now, FinishedAt: now}
+	chats := []Chat{{JID: "0@status", Kind: "status", Name: "status", LastMessageAt: poison, UnreadCount: 1}}
+	if err := st.ReplaceAll(ctx, stats, nil, chats, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		list func() ([]Chat, error)
+	}{
+		{"ListChats", func() ([]Chat, error) { return st.ListChats(ctx, 10) }},
+		{"ListUnreadChats", func() ([]Chat, error) { return st.ListUnreadChats(ctx, 10) }},
+	} {
+		got, err := tc.list()
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("%s: want 1 chat, got %d", tc.name, len(got))
+		}
+		if y := got[0].LastMessageAt.Year(); y < 0 || y > 9999 {
+			t.Fatalf("%s: LastMessageAt year %d is not JSON-marshalable; want clamped to zero", tc.name, y)
+		}
+		if _, err := json.Marshal(got[0]); err != nil {
+			t.Fatalf("%s: JSON marshal of already-populated archive failed: %v", tc.name, err)
+		}
 	}
 }
