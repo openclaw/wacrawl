@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,9 +19,11 @@ import (
 )
 
 const (
-	chatDBName     = "ChatStorage.sqlite"
-	contactsDBName = "ContactsV2.sqlite"
-	appleEpoch     = 978307200
+	chatDBName                  = "ChatStorage.sqlite"
+	contactsDBName              = "ContactsV2.sqlite"
+	appleEpoch                  = 978307200
+	maxJSONUnixSecond           = 253402300799
+	maxJSONAppleSecondExclusive = maxJSONUnixSecond - appleEpoch + 1
 )
 
 type Source struct {
@@ -791,10 +794,11 @@ func copyFileIfExists(src, dst string) error {
 }
 
 func appleNullTime(v sql.NullFloat64) time.Time {
-	if !v.Valid || v.Float64 <= 0 {
+	seconds := v.Float64
+	if !v.Valid || seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds >= maxJSONAppleSecondExclusive {
 		return time.Time{}
 	}
-	return appleTime(v.Float64)
+	return appleTime(seconds)
 }
 
 func appleTime(seconds float64) time.Time {

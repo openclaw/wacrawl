@@ -381,7 +381,10 @@ func (q *Queries) ExportParticipants(ctx context.Context) ([]ExportParticipantsR
 }
 
 const getMessageTimeBounds = `-- name: GetMessageTimeBounds :one
-select cast(coalesce(min(ts), 0) as integer) as oldest_ts, cast(coalesce(max(ts), 0) as integer) as newest_ts from messages
+select
+	cast(coalesce(min(case when ts > 0 and ts <= 253402300799 then ts end), 0) as integer) as oldest_ts,
+	cast(coalesce(max(case when ts > 0 and ts <= 253402300799 then ts end), 0) as integer) as newest_ts
+from messages
 `
 
 type GetMessageTimeBoundsRow struct {
@@ -624,7 +627,7 @@ select
 from chats c
 left join messages m on m.chat_jid = c.jid
 group by c.jid, c.kind, c.name, c.last_message_at, c.unread_count, c.archived, c.removed, c.hidden, c.raw_session_type
-order by c.last_message_at desc
+order by case when c.last_message_at > 0 and c.last_message_at <= 253402300799 then c.last_message_at else 0 end desc
 limit ?1
 `
 
@@ -691,7 +694,7 @@ from chats c
 left join messages m on m.chat_jid = c.jid
 where c.unread_count > 0
 group by c.jid, c.kind, c.name, c.last_message_at, c.unread_count, c.archived, c.removed, c.hidden, c.raw_session_type
-order by c.last_message_at desc
+order by case when c.last_message_at > 0 and c.last_message_at <= 253402300799 then c.last_message_at else 0 end desc
 limit ?1
 `
 

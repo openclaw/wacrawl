@@ -2,6 +2,10 @@
 
 ## [0.2.7] - Unreleased
 
+### Fixed
+
+- Clamp invalid WhatsApp timestamp sentinels so JSON reads survive existing archives and fresh imports (#16, thanks @rmorgans).
+
 ## [0.2.6] - 2026-06-07
 
 ### Added
