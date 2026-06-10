@@ -2,21 +2,39 @@ package whatsappdb
 
 import (
 	"database/sql"
+	"math"
 	"testing"
+	"time"
 )
 
 func TestAppleNullTimeNormalizesSentinel(t *testing.T) {
-	// A 0@status-style sentinel ZLASTMESSAGEDATE converts to an impossible year
-	// (>9999); it must normalize to zero (unknown) so it never reaches JSON.
 	if got := appleNullTime(sql.NullFloat64{Float64: 300000000000, Valid: true}); !got.IsZero() {
 		t.Fatalf("sentinel should normalize to zero, got %v (year %d)", got, got.Year())
 	}
-	// A real timestamp (2026-06-06T00:00:00Z) still converts correctly.
 	got := appleNullTime(sql.NullFloat64{Float64: 802396800, Valid: true})
-	if got.IsZero() || got.Year() != 2026 {
-		t.Fatalf("valid timestamp should convert to 2026, got %v", got)
+	want := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) || got.Location().String() != "UTC" {
+		t.Fatalf("valid timestamp = %s (%s), want %s UTC", got, got.Location(), want)
 	}
-	// Invalid / non-positive stays zero (unchanged behaviour).
+}
+
+func TestAppleNullTimeJSONBounds(t *testing.T) {
+	got := appleNullTime(sql.NullFloat64{Float64: maxJSONAppleSecondExclusive - 1, Valid: true})
+	want := time.Unix(maxJSONUnixSecond, 0).UTC()
+	if !got.Equal(want) {
+		t.Fatalf("max JSON-safe Apple timestamp = %s, want %s", got, want)
+	}
+	for _, value := range []float64{
+		maxJSONAppleSecondExclusive,
+		math.Inf(1),
+		math.NaN(),
+		0,
+		-1,
+	} {
+		if got := appleNullTime(sql.NullFloat64{Float64: value, Valid: true}); !got.IsZero() {
+			t.Fatalf("invalid Apple timestamp %v should normalize to zero, got %v", value, got)
+		}
+	}
 	if got := appleNullTime(sql.NullFloat64{Valid: false}); !got.IsZero() {
 		t.Fatalf("invalid should be zero, got %v", got)
 	}

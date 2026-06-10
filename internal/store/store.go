@@ -14,7 +14,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const (
+	schemaVersion     = 1
+	maxJSONUnixSecond = 253402300799 // 9999-12-31T23:59:59Z, the largest time.Time JSON can marshal.
+
+	messageSelectColumns = `source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, '' as snippet`
+	messageScanColumns   = `source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, snippet`
+)
 
 type Store struct {
 	db   *sql.DB
@@ -348,10 +354,6 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return out, err
 	}
-	// Route message-time bounds through the same JSON-safe conversion as every
-	// other persisted timestamp so a pre-fix out-of-range messages.ts can't break
-	// `--json status`. fromUnix clamps both <= 0 and out-of-range years to zero,
-	// which the omitzero JSON tags then drop.
 	out.OldestMessage = fromUnix(bounds.OldestTs)
 	out.NewestMessage = fromUnix(bounds.NewestTs)
 	lastImport, _ := s.q.GetSyncState(ctx, "last_import_at")
@@ -400,16 +402,50 @@ func (s *Store) Messages(ctx context.Context, filter MessageFilter) ([]Message, 
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
-	query := `select source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, '' from messages where 1=1`
-	var args []any
-	query, args = applyMessageFilters(query, args, filter, false)
-	if filter.Asc {
-		query += " order by ts asc, source_pk asc limit ?"
-	} else {
-		query += " order by ts desc, source_pk desc limit ?"
-	}
-	args = append(args, filter.Limit)
+	query, args := messageListQuery(filter)
 	return scanMessages(ctx, s.db, query, args...)
+}
+
+func messageListQuery(filter MessageFilter) (string, []any) {
+	validQuery, validArgs := filteredMessagesQuery(filter, "")
+	validQuery += " and " + validUnixPredicate("ts")
+	if filter.After != nil || filter.Before != nil {
+		if filter.Asc {
+			validQuery += " order by ts asc, source_pk asc limit ?"
+		} else {
+			validQuery += " order by ts desc, source_pk desc limit ?"
+		}
+		return validQuery, append(validArgs, filter.Limit)
+	}
+
+	if filter.Asc {
+		validQuery, validArgs = filteredMessagesQuery(filter, ", 1 as sort_bucket, ts as sort_ts")
+		validQuery += " and " + validUnixPredicate("ts")
+		invalidQuery, invalidArgs := filteredMessagesQuery(filter, ", 0 as sort_bucket, 0 as sort_ts")
+		invalidQuery += " and " + invalidUnixPredicate("ts")
+		query := "select " + messageScanColumns + " from (select * from (" + invalidQuery + " order by source_pk asc limit ?) union all select * from (" + validQuery + " order by ts asc, source_pk asc limit ?)) order by sort_bucket asc, sort_ts asc, source_pk asc limit ?"
+		args := append([]any{}, invalidArgs...)
+		args = append(args, filter.Limit)
+		args = append(args, validArgs...)
+		args = append(args, filter.Limit, filter.Limit)
+		return query, args
+	}
+
+	validQuery, validArgs = filteredMessagesQuery(filter, ", 0 as sort_bucket, ts as sort_ts")
+	validQuery += " and " + validUnixPredicate("ts")
+	invalidQuery, invalidArgs := filteredMessagesQuery(filter, ", 1 as sort_bucket, 0 as sort_ts")
+	invalidQuery += " and " + invalidUnixPredicate("ts")
+	query := "select " + messageScanColumns + " from (select * from (" + validQuery + " order by ts desc, source_pk desc limit ?) union all select * from (" + invalidQuery + " order by source_pk desc limit ?)) order by sort_bucket asc, sort_ts desc, source_pk desc limit ?"
+	args := append([]any{}, validArgs...)
+	args = append(args, filter.Limit)
+	args = append(args, invalidArgs...)
+	args = append(args, filter.Limit, filter.Limit)
+	return query, args
+}
+
+func filteredMessagesQuery(filter MessageFilter, extraColumns string) (string, []any) {
+	query := "select " + messageSelectColumns + extraColumns + " from messages where 1=1"
+	return applyMessageFilters(query, nil, filter, false)
 }
 
 func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, error) {
@@ -495,18 +531,22 @@ func unix(t time.Time) int64 {
 }
 
 func fromUnix(v int64) time.Time {
-	if v <= 0 {
+	if !validUnixTimestamp(v) {
 		return time.Time{}
 	}
-	t := time.Unix(v, 0).UTC()
-	// A persisted timestamp can fall outside JSON's marshalable year range if it
-	// was imported before appleNullTime clamped impossible Apple-epoch sentinels
-	// (e.g. the 0@status pseudo-chat, stored as ~year 11001). Treat such values as
-	// unknown so reads of an already-populated archive don't break --json output.
-	if y := t.Year(); y < 1 || y > 9999 {
-		return time.Time{}
-	}
-	return t
+	return time.Unix(v, 0).UTC()
+}
+
+func validUnixTimestamp(v int64) bool {
+	return v > 0 && v <= maxJSONUnixSecond
+}
+
+func validUnixPredicate(column string) string {
+	return fmt.Sprintf("%s > 0 and %s <= %d", column, column, maxJSONUnixSecond)
+}
+
+func invalidUnixPredicate(column string) string {
+	return fmt.Sprintf("(%s <= 0 or %s > %d)", column, column, maxJSONUnixSecond)
 }
 
 func nullString(v string) sql.NullString {

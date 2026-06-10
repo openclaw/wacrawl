@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,9 +19,11 @@ import (
 )
 
 const (
-	chatDBName     = "ChatStorage.sqlite"
-	contactsDBName = "ContactsV2.sqlite"
-	appleEpoch     = 978307200
+	chatDBName                  = "ChatStorage.sqlite"
+	contactsDBName              = "ContactsV2.sqlite"
+	appleEpoch                  = 978307200
+	maxJSONUnixSecond           = 253402300799
+	maxJSONAppleSecondExclusive = maxJSONUnixSecond - appleEpoch + 1
 )
 
 type Source struct {
@@ -791,17 +794,11 @@ func copyFileIfExists(src, dst string) error {
 }
 
 func appleNullTime(v sql.NullFloat64) time.Time {
-	if !v.Valid || v.Float64 <= 0 {
+	seconds := v.Float64
+	if !v.Valid || seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds >= maxJSONAppleSecondExclusive {
 		return time.Time{}
 	}
-	t := appleTime(v.Float64)
-	// WhatsApp stores sentinel dates for pseudo-chats like 0@status that convert
-	// to impossible years (e.g. 11001) and break JSON encoding downstream. Treat
-	// anything outside JSON's marshalable year range as unknown.
-	if y := t.Year(); y < 1 || y > 9999 {
-		return time.Time{}
-	}
-	return t
+	return appleTime(seconds)
 }
 
 func appleTime(seconds float64) time.Time {
