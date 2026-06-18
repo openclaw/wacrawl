@@ -16,13 +16,14 @@ func controlManifest() control.Manifest {
 		DefaultCache:    filepath.Join(filepath.Dir(defaultDBPath()), "cache"),
 		DefaultLogs:     filepath.Join(filepath.Dir(defaultDBPath()), "logs"),
 	}
-	m.Capabilities = []string{"metadata", "doctor", "status", "sync", "search", "backup"}
+	m.Capabilities = []string{"metadata", "doctor", "status", "sync", "search", "sql", "backup"}
 	m.Privacy = control.Privacy{ContainsPrivateMessages: true, ExportsSecrets: false, LocalOnlyScopes: []string{"whatsapp-desktop", "sqlite", "encrypted-git-backup"}}
 	m.Commands = map[string]control.Command{
 		"doctor":         {Title: "Doctor", Argv: []string{"wacrawl", "--json", "doctor"}, JSON: true},
 		"status":         {Title: "Status", Argv: []string{"wacrawl", "--json", "--sync", "never", "status"}, JSON: true},
 		"sync":           {Title: "Sync", Argv: []string{"wacrawl", "--json", "sync"}, JSON: true, Mutates: true},
 		"search":         {Title: "Search", Argv: []string{"wacrawl", "--json", "--sync", "auto", "search"}, JSON: true},
+		"sql":            {Title: "SQL", Argv: []string{"wacrawl", "--json", "sql"}, JSON: true},
 		"contact-export": {Title: "Export contacts", Argv: []string{"wacrawl", "--json", "--sync", "never", "contacts", "export"}, JSON: true},
 	}
 	return m

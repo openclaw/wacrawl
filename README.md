@@ -239,6 +239,19 @@ wacrawl --json search "restaurant"
 Search uses message text, chat name, sender name, and media title fields. It
 accepts the same filters as `messages`.
 
+### `sql`
+
+Run a read-only SQL query against the archive database:
+
+```bash
+wacrawl sql "SELECT count(*) FROM messages"
+wacrawl sql "SELECT name FROM sqlite_master WHERE type='table'"
+wacrawl --json sql "SELECT chat_jid, count(*) FROM messages GROUP BY chat_jid ORDER BY 2 DESC LIMIT 10"
+```
+
+Only single read-only `SELECT` statements are accepted. Use `--db PATH` to query
+an alternate archive database.
+
 ## Sync Behavior
 
 `wacrawl` keeps normal reads fresh without a daemon or background service.
