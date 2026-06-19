@@ -106,6 +106,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.runMessages(ctx, rest[1:])
 	case "search":
 		return a.runSearch(ctx, rest[1:])
+	case "sql":
+		return a.runSQL(ctx, rest[1:])
 	case "backup":
 		return a.runBackup(ctx, rest[1:])
 	default:
@@ -566,6 +568,17 @@ func (a *app) print(value any) error {
 			}
 		}
 		return nil
+	case sqlQueryResult:
+		tw := tabwriter.NewWriter(a.stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, strings.Join(v.columns, "\t"))
+		for _, row := range v.rows {
+			values := make([]string, 0, len(v.columns))
+			for _, col := range v.columns {
+				values = append(values, formatSQLValue(row[col]))
+			}
+			_, _ = fmt.Fprintln(tw, strings.Join(values, "\t"))
+		}
+		return tw.Flush()
 	case backup.Result:
 		_, err := fmt.Fprintf(a.stdout, "repo=%s\nchanged=%t\nencrypted=%t\nshards=%d\nmessages=%d\n", v.Repo, v.Changed, v.Encrypted, v.Shards, v.Messages)
 		return err
@@ -597,6 +610,7 @@ Commands:
   unread      List chats with unread messages.
   messages    List archived messages.
   search      Search archived messages.
+  sql         Run a read-only SQL query.
   backup      Init, push, pull, or inspect encrypted Git backups.
 
 Options:
@@ -616,6 +630,7 @@ Examples:
   wacrawl unread --limit 20
   wacrawl --json --sync never contacts export
   wacrawl --json search "invoice" --from-them --after 2026-01-01
+  wacrawl sql "SELECT count(*) FROM messages"
   wacrawl help messages
 `)
 }
@@ -753,6 +768,16 @@ Examples:
   wacrawl search "invoice"
   wacrawl search "flight" --after 2026-01-01 --from-them
   wacrawl --json search --chat 1234567890@s.whatsapp.net "release notes"
+`)
+	case "sql":
+		_, _ = fmt.Fprint(w, `Run a read-only SQL query against the archive database.
+
+Usage:
+  wacrawl sql <select query>
+
+Examples:
+  wacrawl sql "SELECT count(*) FROM messages"
+  wacrawl --json sql "SELECT chat_jid, count(*) FROM messages GROUP BY chat_jid"
 `)
 	case "backup":
 		_, _ = fmt.Fprint(w, `Manage encrypted Git backups of the wacrawl archive.

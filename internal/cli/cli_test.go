@@ -45,6 +45,7 @@ func TestRunEndToEnd(t *testing.T) {
 		{"messages", []string{"--db", dbPath, "messages", "--chat", "123@g.us", "--asc"}, "launch now"},
 		{"search", []string{"--db", dbPath, "search", "--limit", "5", "launch"}, "[launch] now"},
 		{"search flags after query", []string{"--db", dbPath, "search", "launch", "--limit", "5"}, "[launch] now"},
+		{"sql", []string{"--db", dbPath, "sql", "SELECT count(*) AS messages FROM messages"}, "messages"},
 		{"json", []string{"--db", dbPath, "--json", "search", "launch"}, `"message_id"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,6 +57,63 @@ func TestRunEndToEnd(t *testing.T) {
 				t.Fatalf("stdout missing %q:\n%s", tc.want, stdout.String())
 			}
 		})
+	}
+}
+
+func TestRunSQLJSONAndReadOnlyValidation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceAll(ctx, store.ImportStats{}, nil, []store.Chat{
+		{JID: "123@g.us", Kind: "group", Name: "Launch Group", MessageCount: 2},
+	}, nil, nil, []store.Message{
+		{SourcePK: 1, ChatJID: "123@g.us", ChatName: "Launch Group", MessageID: "m1", Text: "launch now"},
+		{SourcePK: 2, ChatJID: "123@g.us", ChatName: "Launch Group", MessageID: "m2", Text: "ship later"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := Run(ctx, []string{"--db", dbPath, "--json", "sql", "SELECT chat_jid, count(*) AS messages FROM messages GROUP BY chat_jid"}, &stdout, &stderr); err != nil {
+		t.Fatalf("sql json: %v stderr=%s", err, stderr.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &rows); err != nil {
+		t.Fatalf("json = %s err=%v", stdout.String(), err)
+	}
+	if len(rows) != 1 || rows[0]["chat_jid"] != "123@g.us" || rows[0]["messages"] != float64(2) {
+		t.Fatalf("rows = %#v", rows)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err = Run(ctx, []string{"--db", dbPath, "sql", "DELETE FROM messages"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), readOnlySelectError) {
+		t.Fatalf("expected read-only select error, got %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	err = Run(ctx, []string{"--db", dbPath, "sql", "SELECT count(*) FROM messages; SELECT count(*) FROM chats"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "only a single read-only select statement is allowed") {
+		t.Fatalf("expected single statement error, got %v", err)
+	}
+
+	invalidDBPath := filepath.Join(t.TempDir(), "archive.db")
+	source := t.TempDir()
+	createDesktopFixture(t, source)
+	err = Run(ctx, []string{"--db", invalidDBPath, "--source", source, "--sync", "always", "sql", "DELETE FROM messages"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), readOnlySelectError) {
+		t.Fatalf("expected read-only select error, got %v", err)
+	}
+	if _, statErr := os.Stat(invalidDBPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid SQL created archive: %v", statErr)
 	}
 }
 
@@ -150,6 +208,18 @@ func assertContactExportKeys(t *testing.T, data []byte) {
 
 func TestMetadataAdvertisesContactExport(t *testing.T) {
 	manifest := controlManifest()
+	sqlCommand, ok := manifest.Commands["sql"]
+	if !ok {
+		t.Fatalf("commands = %#v", manifest.Commands)
+	}
+	if sqlCommand.Mutates || !sqlCommand.JSON {
+		t.Fatalf("sql command = %#v", sqlCommand)
+	}
+	sqlWant := []string{"wacrawl", "--json", "sql"}
+	if !reflect.DeepEqual(sqlCommand.Argv, sqlWant) {
+		t.Fatalf("sql argv = %#v, want %#v", sqlCommand.Argv, sqlWant)
+	}
+
 	command, ok := manifest.Commands["contact-export"]
 	if !ok {
 		t.Fatalf("commands = %#v", manifest.Commands)
@@ -252,6 +322,8 @@ func TestRunHelpMenus(t *testing.T) {
 		{"unread flag", []string{"unread", "--help"}, "wacrawl unread [--limit N]"},
 		{"command flag", []string{"messages", "--help"}, "--has-media"},
 		{"search flag", []string{"search", "--help"}, "wacrawl search [flags] <query>"},
+		{"sql topic", []string{"help", "sql"}, "wacrawl sql <select query>"},
+		{"sql flag", []string{"sql", "--help"}, "read-only SQL query"},
 		{"import flag", []string{"import", "--help"}, "--copy-media"},
 		{"sync topic", []string{"help", "sync"}, "wacrawl sync [--source PATH]"},
 		{"backup flag", []string{"backup", "--help"}, "wacrawl backup <init|push|pull|status>"},
@@ -320,6 +392,18 @@ func TestReadCommandsSyncArchive(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "[launch] now") {
 		t.Fatalf("search should sync before reading:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "archive.db"), "--source", source, "--sync", "always", "sql", "SELECT count(*) AS messages FROM messages"}, &stdout, &stderr); err != nil {
+		t.Fatalf("sql --sync always error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "messages") || !strings.Contains(stdout.String(), "3") {
+		t.Fatalf("sql should sync before reading:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "sync: syncing WhatsApp Desktop snapshot") {
+		t.Fatalf("sql should report sync before reading, got %q", stderr.String())
 	}
 
 	stdout.Reset()
