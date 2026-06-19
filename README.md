@@ -255,7 +255,7 @@ an alternate archive database.
 ## Sync Behavior
 
 `wacrawl` keeps normal reads fresh without a daemon or background service.
-Before `status`, `chats`, `messages`, or `search`, it checks the archive's
+Before `status`, `chats`, `messages`, `search`, or `sql`, it checks the archive's
 last import time. If the archive is stale, it inspects the WhatsApp Desktop
 source and imports a fresh snapshot only when the source is ahead.
 

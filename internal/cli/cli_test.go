@@ -104,6 +104,17 @@ func TestRunSQLJSONAndReadOnlyValidation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "only a single read-only select statement is allowed") {
 		t.Fatalf("expected single statement error, got %v", err)
 	}
+
+	invalidDBPath := filepath.Join(t.TempDir(), "archive.db")
+	source := t.TempDir()
+	createDesktopFixture(t, source)
+	err = Run(ctx, []string{"--db", invalidDBPath, "--source", source, "--sync", "always", "sql", "DELETE FROM messages"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), readOnlySelectError) {
+		t.Fatalf("expected read-only select error, got %v", err)
+	}
+	if _, statErr := os.Stat(invalidDBPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("invalid SQL created archive: %v", statErr)
+	}
 }
 
 func TestContactsExportUsesContractShapeAndSkipsUnsafeNames(t *testing.T) {
@@ -381,6 +392,18 @@ func TestReadCommandsSyncArchive(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "[launch] now") {
 		t.Fatalf("search should sync before reading:\n%s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", filepath.Join(t.TempDir(), "archive.db"), "--source", source, "--sync", "always", "sql", "SELECT count(*) AS messages FROM messages"}, &stdout, &stderr); err != nil {
+		t.Fatalf("sql --sync always error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "messages") || !strings.Contains(stdout.String(), "3") {
+		t.Fatalf("sql should sync before reading:\n%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "sync: syncing WhatsApp Desktop snapshot") {
+		t.Fatalf("sql should report sync before reading, got %q", stderr.String())
 	}
 
 	stdout.Reset()

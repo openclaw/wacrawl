@@ -2,6 +2,10 @@
 
 ## [0.2.8] - Unreleased
 
+### Added
+
+- Add read-only SQL archive queries with JSON output and automatic sync support (#18, thanks @TurboTheTurtle).
+
 ## [0.2.7] - 2026-06-10
 
 ### Fixed
