@@ -4,11 +4,13 @@
 
 ### Added
 
+- Back up copied WhatsApp media as content-deduplicated encrypted Git blobs and restore current or historical media with portable paths and integrity checks.
 - Add read-only SQL archive queries with JSON output, automatic sync support, and lossless duplicate-column handling (#18, thanks @TurboTheTurtle).
 - Add named Git backup snapshots, snapshot history listing, and non-mutating historical restores through `backup pull --ref`.
 
 ### Changed
 
+- Keep media filenames and archive paths inside an encrypted backup index; cleartext manifests expose only counts, encrypted blob paths, sizes, and hashes.
 - Retry concurrent encrypted backup branch-and-tag pushes after rebasing and retargeting the unpublished tag.
 - Move encrypted snapshot, Git history/tag/ref, SQLite bundle, contact export, and safe FTS query mechanics to CrawlKit while preserving the archive schema, backup manifest format, and CLI JSON contracts.
 

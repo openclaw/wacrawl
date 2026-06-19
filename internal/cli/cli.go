@@ -576,7 +576,7 @@ func (a *app) print(value any) error {
 		}
 		return tw.Flush()
 	case backup.Result:
-		_, err := fmt.Fprintf(a.stdout, "repo=%s\nchanged=%t\nencrypted=%t\nshards=%d\nmessages=%d\n", v.Repo, v.Changed, v.Encrypted, v.Shards, v.Messages)
+		_, err := fmt.Fprintf(a.stdout, "repo=%s\nchanged=%t\nencrypted=%t\nshards=%d\nmessages=%d\nmedia_files=%d\n", v.Repo, v.Changed, v.Encrypted, v.Shards, v.Messages, v.MediaFiles)
 		if err == nil && v.Ref != "" {
 			_, err = fmt.Fprintf(a.stdout, "ref=%s\n", v.Ref)
 		}
@@ -590,17 +590,17 @@ func (a *app) print(value any) error {
 			return err
 		}
 		tw := tabwriter.NewWriter(a.stdout, 2, 4, 2, ' ', 0)
-		_, _ = fmt.Fprintln(tw, "REF\tEXPORTED\tMESSAGES\tSHARDS\tTAGS")
+		_, _ = fmt.Fprintln(tw, "REF\tEXPORTED\tMESSAGES\tMEDIA\tSHARDS\tTAGS")
 		for _, snapshot := range v {
 			ref := snapshot.Ref
 			if len(ref) > 12 {
 				ref = ref[:12]
 			}
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\n", ref, formatTime(snapshot.Exported), snapshot.Counts.Messages, snapshot.Shards, strings.Join(snapshot.Tags, ","))
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d\t%s\n", ref, formatTime(snapshot.Exported), snapshot.Counts.Messages, snapshot.Counts.MediaFiles, snapshot.Shards, strings.Join(snapshot.Tags, ","))
 		}
 		return tw.Flush()
 	case backup.Manifest:
-		_, err := fmt.Fprintf(a.stdout, "encrypted=%t\nshards=%d\nmessages=%d\nexported=%s\n", v.Encrypted, len(v.Shards), v.Counts.Messages, formatTime(v.Exported))
+		_, err := fmt.Fprintf(a.stdout, "encrypted=%t\nshards=%d\nmessages=%d\nmedia_files=%d\nexported=%s\n", v.Encrypted, len(v.Shards), v.Counts.Messages, len(v.Files), formatTime(v.Exported))
 		return err
 	default:
 		enc := json.NewEncoder(a.stdout)
@@ -839,7 +839,7 @@ Flags:
   --no-push          Commit locally without pushing.
 `)
 	case "backup push":
-		_, _ = fmt.Fprint(w, `Export and push encrypted archive shards.
+		_, _ = fmt.Fprint(w, `Export and push encrypted archive shards and copied media.
 
 Usage:
   wacrawl backup push [flags]
@@ -851,10 +851,11 @@ Flags:
   --identity PATH    Age identity path.
   --recipient AGE    Age recipient. Repeatable.
   --no-push          Commit locally without pushing.
+  --no-media         Omit copied media files from this backup.
   --tag NAME         Tag the resulting backup commit.
 `)
 	case "backup pull":
-		_, _ = fmt.Fprint(w, `Restore encrypted archive shards into the archive database.
+		_, _ = fmt.Fprint(w, `Restore encrypted archive shards and copied media.
 
 Usage:
   wacrawl backup pull [flags]
@@ -864,6 +865,7 @@ Flags:
   --repo PATH        Backup Git repository path.
   --remote URL       Backup Git remote.
   --identity PATH    Age identity path.
+  --no-media         Restore archive rows without copied media files.
   --ref REF          Restore a tag, commit, or branch without changing checkout.
 `)
 	case "backup status":

@@ -518,7 +518,7 @@ func TestBackupCommands(t *testing.T) {
 	identity := filepath.Join(t.TempDir(), "age.key")
 
 	var stdout, stderr bytes.Buffer
-	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "sync"}, &stdout, &stderr); err != nil {
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "sync", "--copy-media"}, &stdout, &stderr); err != nil {
 		t.Fatalf("sync error = %v stderr=%s", err, stderr.String())
 	}
 	stdout.Reset()
@@ -534,7 +534,7 @@ func TestBackupCommands(t *testing.T) {
 	if err := Run(ctx, []string{"--db", dbPath, "--sync", "never", "backup", "push", "--config", config, "--no-push", "--tag", "snapshot/initial"}, &stdout, &stderr); err != nil {
 		t.Fatalf("backup push error = %v stderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "encrypted=true") || !strings.Contains(stdout.String(), "messages=3") || !strings.Contains(stdout.String(), "tag=snapshot/initial") {
+	if !strings.Contains(stdout.String(), "encrypted=true") || !strings.Contains(stdout.String(), "messages=3") || !strings.Contains(stdout.String(), "media_files=1") || !strings.Contains(stdout.String(), "tag=snapshot/initial") {
 		t.Fatalf("backup push output mismatch:\n%s", stdout.String())
 	}
 	stdout.Reset()
@@ -587,6 +587,10 @@ func TestBackupCommands(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "[launch] now") {
 		t.Fatalf("restored search mismatch:\n%s", stdout.String())
+	}
+	restoredMedia := filepath.Join(filepath.Dir(restoredDB), "media", "Media", "123@g.us", "a", "test.jpg")
+	if body, err := os.ReadFile(restoredMedia); err != nil || string(body) != "image" {
+		t.Fatalf("restored media = %q err=%v", body, err)
 	}
 }
 

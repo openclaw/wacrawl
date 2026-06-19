@@ -304,13 +304,19 @@ data/contacts.jsonl.gz.age
 data/groups.jsonl.gz.age
 data/group_participants.jsonl.gz.age
 data/messages/YYYY/MM.jsonl.gz.age
+data/files/index*.jsonl.gz.age
+data/files/HH/SHA256.gz.age
 ```
 
 `manifest.json` is intentionally cleartext so a machine can inspect backup
 freshness, public age recipients, counts, shard paths, encrypted byte sizes, and
-plaintext hashes without decrypting message contents. It does not contain
-message text, chat names, contacts, participant IDs, or media metadata. Those
-fields live inside the `*.jsonl.gz.age` shards.
+plaintext hashes without decrypting backup contents. It does not contain
+message text, chat names, contacts, participant IDs, media metadata, filenames,
+or archive paths. Those fields live inside the `*.jsonl.gz.age` shards.
+
+Media previously copied with `wacrawl sync --copy-media` is included by default.
+Identical files share one encrypted content-addressed blob. Use `backup push
+--no-media` or `backup pull --no-media` when only archive rows are wanted.
 
 ### Command Cheat Sheet
 
@@ -339,7 +345,8 @@ Useful safety variants:
 
 ```bash
 # Force a fresh WhatsApp import before writing the backup.
-wacrawl --sync always backup push
+wacrawl sync --copy-media
+wacrawl --sync never backup push
 
 # Write and commit locally, but do not push to GitHub.
 wacrawl backup push --no-push
@@ -382,20 +389,22 @@ safe to place in `~/.wacrawl/backup.json`, `manifest.json`, or docs.
 For each shard, `wacrawl backup push`:
 
 1. Exports rows from the local archive as deterministic JSONL.
-2. Gzip-compresses the JSONL with a fixed gzip timestamp.
-3. Encrypts the compressed bytes with age for every configured recipient.
-4. Writes only the encrypted `*.jsonl.gz.age` shard to Git.
-5. Writes `manifest.json` with cleartext metadata used for status, diffing, and restore verification.
+2. Streams copied media through hashing, gzip, and age encryption in one pass.
+3. Content-deduplicates identical media and encrypts the private path index.
+4. Encrypts every compressed payload for each configured recipient.
+5. Writes only encrypted `*.jsonl.gz.age` payloads to Git.
+6. Writes `manifest.json` with cleartext metadata used for status, diffing, and restore verification.
 
 `wacrawl backup pull` does the reverse: it pulls/rebases the backup repo,
 checks manifest shard paths, decrypts each shard with the local age identity,
-verifies the shard hash, validates cross-table references, and imports the
-snapshot into the configured archive database in one transaction.
+verifies row and media hashes, restores copied media under `media/` next to the
+configured database, localizes portable media paths, validates cross-table
+references, and imports the snapshot in one transaction.
 
 What the backup protects:
 
 - A GitHub read-only compromise or accidental clone does not reveal message text,
-  contacts, chat names, participant IDs, or media metadata.
+  contacts, chat names, participant IDs, media metadata, filenames, or archive paths.
 - Each encrypted shard can be decrypted by any listed age recipient, so multiple
   machines can share one backup without sharing one private key.
 - Age provides encrypted-file integrity; corrupted or wrong-key shards fail to
@@ -405,7 +414,7 @@ What remains visible in Git:
 
 - `manifest.json` is cleartext.
 - The manifest reveals export time, public recipients, table names, row counts,
-  shard paths, encrypted byte sizes, and plaintext shard hashes.
+  opaque shard paths, encrypted byte sizes, plaintext content hashes, and media counts.
 - Message shard paths reveal activity by year and month, for example
   `data/messages/2026/04.jsonl.gz.age`.
 - Git history reveals backup cadence and which encrypted shards changed.
@@ -470,7 +479,10 @@ it refreshes the local archive only when the WhatsApp Desktop source is stale
 and newer than the archive. Then it exports stable JSONL, gzip-compresses each
 shard, encrypts each shard for every configured recipient, updates
 `manifest.json`, removes stale encrypted shards, commits, and pushes the backup
-repo.
+repo. Copied files already under the archive `media/` directory are included by
+default; run `wacrawl sync --copy-media` first to capture media bytes still
+available from WhatsApp Desktop. `backup push` never reads media directly from
+the WhatsApp container.
 
 Pass `--tag NAME` to tag the resulting snapshot commit. If the archive is
 unchanged, the tag points at the existing current snapshot. Existing tags are
@@ -478,7 +490,7 @@ never moved to a different commit.
 
 Re-running `backup push` without archive changes leaves Git clean. The command
 prints the repo path, whether anything changed, whether the backup is encrypted,
-the shard count, and the message count.
+the shard count, message count, and copied-media count.
 
 Use `--no-push` for local dry runs that commit into the backup checkout but do
 not push to the remote:
@@ -486,6 +498,9 @@ not push to the remote:
 ```bash
 wacrawl backup push --no-push
 ```
+
+Use `--no-media` to omit copied media from a snapshot. The current backup then
+contains archive rows only; earlier Git commits still retain their media blobs.
 
 ### Restore
 
@@ -498,7 +513,8 @@ wacrawl backup pull
 `backup pull` pulls/rebases the configured backup repo, decrypts every shard with
 the local age identity, verifies each plaintext shard hash from the manifest,
 validates cross-table references, and replaces the configured `wacrawl` archive
-database in one import transaction.
+database in one import transaction. Copied media is restored alongside the
+database unless `--no-media` is set.
 
 Restore a historical tag, commit, or branch with `--ref`:
 

@@ -70,6 +70,7 @@ func (a *app) runBackupInit(ctx context.Context, args []string) error {
 func (a *app) runBackupPush(ctx context.Context, args []string) error {
 	fs, opts, noPush := backupFlagSet("backup push")
 	fs.StringVar(&opts.Tag, "tag", "", "")
+	fs.BoolVar(&opts.NoMedia, "no-media", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCommandUsage(a.stdout, "backup", "push")
@@ -93,6 +94,7 @@ func (a *app) runBackupPush(ctx context.Context, args []string) error {
 func (a *app) runBackupPull(ctx context.Context, args []string) error {
 	fs, opts, _ := backupFlagSet("backup pull")
 	fs.StringVar(&opts.Ref, "ref", "", "")
+	fs.BoolVar(&opts.NoMedia, "no-media", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCommandUsage(a.stdout, "backup", "pull")

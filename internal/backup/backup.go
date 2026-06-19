@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ type Manifest struct {
 	Recipients []string     `json:"recipients,omitempty"`
 	Counts     Counts       `json:"counts"`
 	Shards     []ShardEntry `json:"shards"`
+	Files      []FileEntry  `json:"files,omitempty"`
 }
 
 type Counts struct {
@@ -31,18 +33,21 @@ type Counts struct {
 	Groups       int `json:"groups"`
 	Participants int `json:"participants"`
 	Messages     int `json:"messages"`
+	MediaFiles   int `json:"media_files,omitempty"`
 }
 
 type ShardEntry = ckbackup.ShardEntry
+type FileEntry = ckbackup.FileEntry
 
 type Result struct {
-	Repo      string `json:"repo"`
-	Changed   bool   `json:"changed"`
-	Encrypted bool   `json:"encrypted"`
-	Shards    int    `json:"shards"`
-	Messages  int    `json:"messages"`
-	Ref       string `json:"ref,omitempty"`
-	Tag       string `json:"tag,omitempty"`
+	Repo       string `json:"repo"`
+	Changed    bool   `json:"changed"`
+	Encrypted  bool   `json:"encrypted"`
+	Shards     int    `json:"shards"`
+	Messages   int    `json:"messages"`
+	MediaFiles int    `json:"media_files"`
+	Ref        string `json:"ref,omitempty"`
+	Tag        string `json:"tag,omitempty"`
 }
 
 func Init(ctx context.Context, opts Options) (Config, string, error) {
@@ -96,7 +101,14 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	manifest, err := writeSnapshot(ctx, cfg, data, oldManifest)
+	var files []ckbackup.File
+	if !opts.NoMedia {
+		files, err = collectBackupMedia(ctx, st.Path(), data.Messages)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	manifest, err := writeSnapshot(ctx, cfg, data, files, oldManifest)
 	if err != nil {
 		return Result{}, err
 	}
@@ -114,7 +126,7 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 			return Result{}, err
 		}
 	}
-	return Result{Repo: cfg.Repo, Changed: changed, Encrypted: true, Shards: len(manifest.Shards), Messages: manifest.Counts.Messages, Tag: tag}, nil
+	return Result{Repo: cfg.Repo, Changed: changed, Encrypted: true, Shards: len(manifest.Shards), Messages: manifest.Counts.Messages, MediaFiles: len(manifest.Files), Tag: tag}, nil
 }
 
 func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
@@ -142,6 +154,23 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	root, err := archiveRoot(st.Path())
+	if err != nil {
+		return Result{}, err
+	}
+	if !opts.NoMedia {
+		if ref == "" {
+			_, err = ckbackup.RestoreFilesUnder(ctx, crawlkitConfig(cfg), toCrawlkitManifest(manifest), root, "media")
+		} else {
+			_, _, err = ckbackup.RestoreFilesAtUnder(ctx, crawlkitConfig(cfg), mirrorOptions(cfg), toCrawlkitManifest(manifest), ref, root, "media")
+		}
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	if err := localizeMediaPaths(data.Messages, root); err != nil {
+		return Result{}, err
+	}
 	if err := data.Validate(); err != nil {
 		return Result{}, err
 	}
@@ -152,7 +181,7 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err := st.ImportSnapshot(ctx, data, sourcePath, manifest.Exported); err != nil {
 		return Result{}, err
 	}
-	return Result{Repo: cfg.Repo, Changed: true, Encrypted: manifest.Encrypted, Shards: len(manifest.Shards), Messages: len(data.Messages), Ref: ref}, nil
+	return Result{Repo: cfg.Repo, Changed: true, Encrypted: manifest.Encrypted, Shards: len(manifest.Shards), Messages: len(data.Messages), MediaFiles: len(manifest.Files), Ref: ref}, nil
 }
 
 func Status(ctx context.Context, opts Options) (Manifest, string, error) {
@@ -170,7 +199,7 @@ func Status(ctx context.Context, opts Options) (Manifest, string, error) {
 	return manifest, cfg.Repo, nil
 }
 
-func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, old Manifest) (Manifest, error) {
+func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, files []ckbackup.File, old Manifest) (Manifest, error) {
 	shards := []ckbackup.Shard{
 		{Table: "contacts", Path: "data/contacts.jsonl.gz.age", Rows: data.Contacts},
 		{Table: "chats", Path: "data/chats.jsonl.gz.age", Rows: data.Chats},
@@ -184,7 +213,7 @@ func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, old
 	if len(data.Messages) == 0 {
 		delete(sharedOld.Counts, "messages")
 	}
-	manifest, err := ckbackup.WriteSnapshot(ctx, crawlkitConfig(cfg), shards, sharedOld)
+	manifest, err := ckbackup.WriteSnapshotWithFiles(ctx, crawlkitConfig(cfg), shards, files, sharedOld)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -311,6 +340,7 @@ func toCrawlkitManifest(manifest Manifest) ckbackup.Manifest {
 			"messages":     manifest.Counts.Messages,
 		},
 		Shards: manifest.Shards,
+		Files:  manifest.Files,
 	}
 }
 
@@ -330,9 +360,71 @@ func fromCrawlkitManifest(manifest ckbackup.Manifest) Manifest {
 			Groups:       manifest.Counts["groups"],
 			Participants: participants,
 			Messages:     manifest.Counts["messages"],
+			MediaFiles:   len(manifest.Files),
 		},
 		Shards: manifest.Shards,
+		Files:  manifest.Files,
 	}
+}
+
+func collectBackupMedia(ctx context.Context, dbPath string, messages []store.Message) ([]ckbackup.File, error) {
+	root, err := archiveRoot(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	files, err := ckbackup.CollectFiles(ctx, filepath.Join(root, "media"), "media")
+	if err != nil {
+		return nil, err
+	}
+	logicalBySource := make(map[string]string, len(files))
+	for _, file := range files {
+		absolute, err := filepath.Abs(file.Source)
+		if err != nil {
+			return nil, err
+		}
+		logicalBySource[filepath.Clean(absolute)] = file.Path
+	}
+	for index := range messages {
+		mediaPath := messages[index].MediaPath
+		if mediaPath == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(mediaPath)
+		if err != nil {
+			return nil, err
+		}
+		if logical, ok := logicalBySource[filepath.Clean(absolute)]; ok {
+			messages[index].MediaPath = logical
+		}
+	}
+	return files, nil
+}
+
+func localizeMediaPaths(messages []store.Message, root string) error {
+	for index := range messages {
+		value := filepath.ToSlash(messages[index].MediaPath)
+		if value == "media" || !strings.HasPrefix(value, "media/") {
+			continue
+		}
+		clean := path.Clean(value)
+		if clean == "media" || !strings.HasPrefix(clean, "media/") {
+			return fmt.Errorf("backup media path escapes archive root: %s", value)
+		}
+		target := filepath.Clean(filepath.Join(root, filepath.FromSlash(clean)))
+		if target != root && !strings.HasPrefix(target, root+string(filepath.Separator)) {
+			return fmt.Errorf("backup media path escapes archive root: %s", value)
+		}
+		messages[index].MediaPath = target
+	}
+	return nil
+}
+
+func archiveRoot(dbPath string) (string, error) {
+	absolute, err := filepath.Abs(filepath.Dir(dbPath))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(absolute), nil
 }
 
 func writeBackupReadme(repo string) error {
@@ -357,12 +449,15 @@ data/contacts.jsonl.gz.age
 data/groups.jsonl.gz.age
 data/group_participants.jsonl.gz.age
 data/messages/YYYY/MM.jsonl.gz.age
+data/files/index*.jsonl.gz.age
+data/files/HH/SHA256.gz.age
 ` + "```" + `
 
 ` + "`manifest.json`" + ` is cleartext and contains format version, export time,
 public age recipients, table counts, shard paths, encrypted byte sizes, and
 plaintext hashes used for restore verification. Message text, contacts, chat
-names, participant IDs, and media metadata stay inside encrypted ` + "`*.jsonl.gz.age`" + ` shards.
+names, participant IDs, media metadata, filenames, and archive paths stay inside
+encrypted ` + "`*.jsonl.gz.age`" + ` shards.
 
 ## Security Model
 
@@ -373,8 +468,8 @@ encrypted with age for every configured public recipient. The local
 Git can still see manifest metadata: export time, public recipients, table
 names, row counts, shard paths, encrypted byte sizes, plaintext shard hashes,
 backup cadence, and which encrypted shards changed. Git cannot read message
-text, contacts, chat names, participant IDs, or media metadata without an age
-identity.
+text, contacts, chat names, participant IDs, media metadata, filenames, or
+archive paths without an age identity.
 
 Anyone who can push to this repository can replace encrypted backup data with
 different data encrypted to your public recipient. Keep repository write access
@@ -390,8 +485,8 @@ wacrawl backup push --tag snapshot/before-phone-migration
 ` + "```" + `
 
 The command pulls/rebases this checkout, refreshes the local wacrawl archive
-according to the normal sync policy, writes encrypted shards, updates the
-manifest, commits, and pushes this repository.
+according to the normal sync policy, writes encrypted row shards and copied
+media blobs, updates the manifest, commits, and pushes this repository.
 
 Every changed backup is a Git commit. Optional tags name important checkpoints;
 tag names are visible Git metadata and should not contain sensitive text.
@@ -404,10 +499,10 @@ wacrawl backup snapshots
 wacrawl --db /tmp/wacrawl-history.db backup pull --ref snapshot/before-phone-migration
 ` + "```" + `
 
-` + "`backup pull`" + ` decrypts every shard with the local age identity, verifies the
-manifest hashes, validates the snapshot, and imports it into the configured
-wacrawl archive database. Historical refs are read directly from Git objects
-without changing this checkout's current branch.
+` + "`backup pull`" + ` decrypts every payload with the local age identity, verifies
+the manifest hashes, restores copied media, validates the snapshot, and imports
+it into the configured wacrawl archive database. Historical refs are read
+directly from Git objects without changing this checkout's current branch.
 
 ## Recovery
 
