@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -59,7 +60,11 @@ func ensureRepoForRead(ctx context.Context, cfg Config) error {
 	if _, err := os.Stat(filepath.Join(cfg.Repo, ".git")); err != nil {
 		return ensureRepo(ctx, cfg)
 	}
-	if err := git(ctx, cfg.Repo, "remote", "get-url", "origin"); err != nil {
+	remotes, err := gitOutput(ctx, cfg.Repo, "remote")
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(strings.Fields(string(remotes)), "origin") {
 		return nil
 	}
 	return git(ctx, cfg.Repo, "fetch", "--prune", "--tags", "origin")
