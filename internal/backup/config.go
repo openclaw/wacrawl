@@ -30,6 +30,7 @@ type Options struct {
 	Ref        string
 	Tag        string
 	Limit      int
+	NoMedia    bool
 }
 
 func DefaultConfig() Config {

@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,6 +30,15 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 			{SourcePK: 1, ChatJID: "chat@g.us", ChatName: "Launch Group", MessageID: "a", SenderJID: "alice@s.whatsapp.net", SenderName: "Alice", Timestamp: now, Text: "secret launch text", RawType: 0, MessageType: "text"},
 		},
 	}
+	mediaPath := filepath.Join(filepath.Dir(source.Path()), "media", "photo.jpg ")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("private media bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data.Messages[0].MediaType = "image"
+	data.Messages[0].MediaPath = mediaPath
 	if err := source.ImportSnapshot(ctx, data, "/fixture", now); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +60,7 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed || result.Messages != 1 || result.Shards == 0 {
+	if !result.Changed || result.Messages != 1 || result.MediaFiles != 1 || result.Shards == 0 {
 		t.Fatalf("unexpected push result: %+v", result)
 	}
 	second, err := Push(ctx, source, opts)
@@ -64,14 +74,14 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if statusRepo != repo || status.Counts.Messages != 1 {
+	if statusRepo != repo || status.Counts.Messages != 1 || status.Counts.MediaFiles != 1 {
 		t.Fatalf("unexpected backup status repo=%s status=%+v", statusRepo, status)
 	}
 	manifest, err := readManifest(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manifest.Encrypted || manifest.Counts.Messages != 1 {
+	if !manifest.Encrypted || manifest.Counts.Messages != 1 || len(manifest.Files) != 1 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
 	ciphertext, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(manifest.Shards[len(manifest.Shards)-1].Path))) // #nosec G304 -- test reads a generated shard path from its temp repo manifest.
@@ -81,13 +91,20 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if strings.Contains(string(ciphertext), "secret launch text") {
 		t.Fatal("encrypted shard contains plaintext")
 	}
+	manifestBody, err := os.ReadFile(filepath.Join(repo, "manifest.json")) // #nosec G304 -- test reads the manifest from its temp backup repo.
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(manifestBody), "photo.jpg ") || strings.Contains(string(manifestBody), "private media bytes") {
+		t.Fatalf("backup manifest exposes media details: %s", manifestBody)
+	}
 
 	restored := openFixtureStore(t, "restored.db")
 	pulled, err := Pull(ctx, restored, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pulled.Messages != 1 {
+	if pulled.Messages != 1 || pulled.MediaFiles != 1 {
 		t.Fatalf("unexpected pull result: %+v", pulled)
 	}
 	results, err := restored.Search(ctx, store.MessageFilter{Query: "secret", Limit: 10})
@@ -96,6 +113,14 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Text != "secret launch text" {
 		t.Fatalf("restore search mismatch: %+v", results)
+	}
+	wantRestoredMedia := filepath.Join(filepath.Dir(restored.Path()), "media", "photo.jpg ")
+	if results[0].MediaPath != wantRestoredMedia {
+		t.Fatalf("restored media path = %q, want %q", results[0].MediaPath, wantRestoredMedia)
+	}
+	mediaBody, err := os.ReadFile(wantRestoredMedia) // #nosec G304 -- test reads its expected temp restore path.
+	if err != nil || string(mediaBody) != "private media bytes" {
+		t.Fatalf("restored media = %q err=%v", mediaBody, err)
 	}
 
 	secondIdentity := filepath.Join(t.TempDir(), "second-age.key")
@@ -146,11 +171,11 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 		t.Fatal(err)
 	}
 	runGit(t, derivedRepo, "init")
-	derived, err := Push(ctx, source, Options{Repo: derivedRepo, Identity: identity, Push: false})
+	derived, err := Push(ctx, source, Options{Repo: derivedRepo, Identity: identity, Push: false, NoMedia: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !derived.Changed || derived.Messages != 1 {
+	if !derived.Changed || derived.Messages != 1 || derived.MediaFiles != 0 {
 		t.Fatalf("unexpected derived-recipient push: %+v", derived)
 	}
 
@@ -167,6 +192,106 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	}
 }
 
+func TestReplaceMediaDuringRollsBackFailedImport(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "media")
+	staged := filepath.Join(dir, "staged")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "old"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("import failed")
+	if err := replaceMediaDuring(staged, target, func() error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("replace error = %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(target, "old")); err != nil || string(body) != "old" { // #nosec G304 -- test reads its temp media target.
+		t.Fatalf("previous media was not restored: %q err=%v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "new")); !os.IsNotExist(err) {
+		t.Fatalf("failed media remained after rollback: %v", err)
+	}
+	staged = filepath.Join(dir, "staged-success")
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(staged, target, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" { // #nosec G304 -- test reads its temp media target.
+		t.Fatalf("promoted media = %q err=%v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "old")); !os.IsNotExist(err) {
+		t.Fatalf("previous media remained after success: %v", err)
+	}
+}
+
+func TestReplaceMediaDuringValidatesAndHandlesNoPreviousMedia(t *testing.T) {
+	dir := t.TempDir()
+	stagedFile := filepath.Join(dir, "staged-file")
+	if err := os.WriteFile(stagedFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(stagedFile, filepath.Join(dir, "media"), func() error { return nil }); err == nil {
+		t.Fatal("regular staged file should fail")
+	}
+
+	staged := filepath.Join(dir, "staged")
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "media")
+	if err := os.WriteFile(target, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(staged, target, func() error { return nil }); err == nil {
+		t.Fatal("regular target file should fail")
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(staged, target, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" { // #nosec G304 -- test reads its temp media target.
+		t.Fatalf("new media without previous directory = %q err=%v", body, err)
+	}
+}
+
+func TestLocalizeMediaPathsRejectsEscape(t *testing.T) {
+	messages := []store.Message{{MediaPath: "media/../outside"}}
+	if err := localizeMediaPaths(messages, t.TempDir()); err == nil {
+		t.Fatal("escaping portable media path should fail")
+	}
+}
+
+func TestDecodeSnapshotRejectsInvalidShards(t *testing.T) {
+	for _, table := range []string{"contacts", "chats", "groups", "group_participants", "messages", "unknown"} {
+		t.Run(table, func(t *testing.T) {
+			shard := ckbackup.DecodedShard{
+				Entry:     ckbackup.ShardEntry{Table: table},
+				Plaintext: []byte("{"),
+			}
+			if _, err := decodeSnapshot([]ckbackup.DecodedShard{shard}); err == nil {
+				t.Fatal("invalid shard should fail")
+			}
+		})
+	}
+}
+
 func TestHistoricalSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	source := openFixtureStore(t, "history-source.db")
@@ -178,6 +303,15 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 			SenderJID: "alice@s.whatsapp.net", Timestamp: now, Text: "first snapshot", MessageType: "text",
 		}},
 	}
+	mediaPath := filepath.Join(filepath.Dir(source.Path()), "media", "history.jpg")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("first historical media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data.Messages[0].MediaType = "image"
+	data.Messages[0].MediaPath = mediaPath
 	if err := source.ImportSnapshot(ctx, data, "/fixture", now); err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +343,9 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 		SourcePK: 2, ChatJID: "chat@g.us", ChatName: "History", MessageID: "second",
 		SenderJID: "alice@s.whatsapp.net", Timestamp: now.Add(time.Minute), Text: "second snapshot", MessageType: "text",
 	})
+	if err := os.WriteFile(mediaPath, []byte("second historical media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := source.ImportSnapshot(ctx, data, "/fixture", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +408,7 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pulled.Messages != 1 || pulled.Ref != initial {
+	if pulled.Messages != 1 || pulled.MediaFiles != 1 || pulled.Ref != initial {
 		t.Fatalf("unexpected historical pull: %+v", pulled)
 	}
 	after, err := resolveCommit(ctx, repo, "HEAD")
@@ -287,6 +424,10 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].MessageID != "first" {
 		t.Fatalf("historical restore mismatch: %+v", results)
+	}
+	historicalMedia, err := os.ReadFile(filepath.Join(filepath.Dir(restored.Path()), "media", "history.jpg"))
+	if err != nil || string(historicalMedia) != "first historical media" {
+		t.Fatalf("historical media = %q err=%v", historicalMedia, err)
 	}
 	if _, err := Pull(ctx, restored, Options{ConfigPath: configPath, Ref: "missing-ref"}); err == nil {
 		t.Fatal("missing historical ref should fail")
