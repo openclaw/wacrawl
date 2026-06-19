@@ -218,6 +218,64 @@ func TestReplaceMediaDuringRollsBackFailedImport(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(target, "new")); !os.IsNotExist(err) {
 		t.Fatalf("failed media remained after rollback: %v", err)
 	}
+	staged = filepath.Join(dir, "staged-success")
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(staged, target, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" {
+		t.Fatalf("promoted media = %q err=%v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "old")); !os.IsNotExist(err) {
+		t.Fatalf("previous media remained after success: %v", err)
+	}
+}
+
+func TestReplaceMediaDuringValidatesAndHandlesNoPreviousMedia(t *testing.T) {
+	dir := t.TempDir()
+	stagedFile := filepath.Join(dir, "staged-file")
+	if err := os.WriteFile(stagedFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(stagedFile, filepath.Join(dir, "media"), func() error { return nil }); err == nil {
+		t.Fatal("regular staged file should fail")
+	}
+
+	staged := filepath.Join(dir, "staged")
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "media")
+	if err := os.WriteFile(target, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(staged, target, func() error { return nil }); err == nil {
+		t.Fatal("regular target file should fail")
+	}
+	if err := os.Remove(target); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceMediaDuring(staged, target, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" {
+		t.Fatalf("new media without previous directory = %q err=%v", body, err)
+	}
+}
+
+func TestLocalizeMediaPathsRejectsEscape(t *testing.T) {
+	messages := []store.Message{{MediaPath: "media/../outside"}}
+	if err := localizeMediaPaths(messages, t.TempDir()); err == nil {
+		t.Fatal("escaping portable media path should fail")
+	}
 }
 
 func TestHistoricalSnapshotRestore(t *testing.T) {
