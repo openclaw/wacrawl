@@ -295,6 +295,19 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 
 func TestSnapshotHistoryValidation(t *testing.T) {
 	ctx := context.Background()
+	if err := ensureRepoForRead(ctx, Config{}); err == nil {
+		t.Fatal("empty backup repo path should fail")
+	}
+	createdRepo := filepath.Join(t.TempDir(), "created-backup")
+	if err := ensureRepoForRead(ctx, Config{Repo: createdRepo}); err != nil {
+		t.Fatalf("read-only setup should initialize a missing repository: %v", err)
+	}
+	localRepo := filepath.Join(t.TempDir(), "local-backup")
+	runGit(t, "", "init", localRepo)
+	if err := ensureRepoForRead(ctx, Config{Repo: localRepo}); err != nil {
+		t.Fatalf("read-only setup without origin: %v", err)
+	}
+
 	repo := filepath.Join(t.TempDir(), "backup")
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, "", "init", "--bare", remote)
