@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
 
       - name: Setup Go
         uses: actions/setup-go@v6.4.0
@@ -28,16 +28,16 @@ jobs:
           cache: true
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v9.2.0
+        uses: golangci/golangci-lint-action@v9.2.1
         with:
-          version: v2.11.1
+          version: v2.12.2
 
       - name: Install analyzers
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
-          go install mvdan.cc/gofumpt@v0.9.2
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
-          go install golang.org/x/tools/cmd/deadcode@v0.45.0
+          go install mvdan.cc/gofumpt@v0.10.0
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+          go install golang.org/x/tools/cmd/deadcode@v0.46.0
 
       - name: Vet
         run: go vet ./...
@@ -71,7 +71,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
 
       - name: Setup Go
         uses: actions/setup-go@v6.4.0
@@ -96,7 +96,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
 
       - name: Setup Go
         uses: actions/setup-go@v6.4.0
@@ -113,7 +113,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
 
       - name: Run govulncheck
         run: '"$(go env GOPATH)/bin/govulncheck" ./...'
@@ -123,7 +123,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
 
@@ -134,7 +134,7 @@ jobs:
           cache: true
 
       - name: Snapshot release build
-        uses: goreleaser/goreleaser-action@v7.1.0
+        uses: goreleaser/goreleaser-action@v7.2.2
         with:
           distribution: goreleaser
           version: "~> v2"
@@ -145,7 +145,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
 
