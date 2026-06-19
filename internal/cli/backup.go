@@ -36,6 +36,8 @@ func (a *app) runBackup(ctx context.Context, args []string) error {
 		return a.runBackupPull(ctx, args[1:])
 	case "status":
 		return a.runBackupStatus(ctx, args[1:])
+	case "snapshots":
+		return a.runBackupSnapshots(ctx, args[1:])
 	default:
 		return usageErr(fmt.Errorf("unknown backup command %q", args[0]))
 	}
@@ -67,6 +69,7 @@ func (a *app) runBackupInit(ctx context.Context, args []string) error {
 
 func (a *app) runBackupPush(ctx context.Context, args []string) error {
 	fs, opts, noPush := backupFlagSet("backup push")
+	fs.StringVar(&opts.Tag, "tag", "", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCommandUsage(a.stdout, "backup", "push")
@@ -89,6 +92,7 @@ func (a *app) runBackupPush(ctx context.Context, args []string) error {
 
 func (a *app) runBackupPull(ctx context.Context, args []string) error {
 	fs, opts, _ := backupFlagSet("backup pull")
+	fs.StringVar(&opts.Ref, "ref", "", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCommandUsage(a.stdout, "backup", "pull")
@@ -106,6 +110,32 @@ func (a *app) runBackupPull(ctx context.Context, args []string) error {
 		}
 		return a.print(result)
 	})
+}
+
+func (a *app) runBackupSnapshots(ctx context.Context, args []string) error {
+	fs, opts, _ := backupFlagSet("backup snapshots")
+	fs.IntVar(&opts.Limit, "limit", 20, "")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printCommandUsage(a.stdout, "backup", "snapshots")
+			return nil
+		}
+		return usageErr(err)
+	}
+	if fs.NArg() != 0 {
+		return usageErr(errors.New("backup snapshots takes flags only"))
+	}
+	if opts.Limit < 1 {
+		return usageErr(errors.New("backup snapshots --limit must be greater than zero"))
+	}
+	snapshots, repo, err := backup.Snapshots(ctx, *opts)
+	if err != nil {
+		return err
+	}
+	if a.json {
+		return a.print(map[string]any{"repo": repo, "snapshots": snapshots})
+	}
+	return a.print(snapshots)
 }
 
 func (a *app) runBackupStatus(ctx context.Context, args []string) error {

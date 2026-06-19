@@ -164,6 +164,171 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	}
 }
 
+func TestHistoricalSnapshotRestore(t *testing.T) {
+	ctx := context.Background()
+	source := openFixtureStore(t, "history-source.db")
+	now := time.Date(2026, 6, 19, 9, 0, 0, 0, time.UTC)
+	data := store.SnapshotData{
+		Chats: []store.Chat{{JID: "chat@g.us", Kind: "group", Name: "History", LastMessageAt: now}},
+		Messages: []store.Message{{
+			SourcePK: 1, ChatJID: "chat@g.us", ChatName: "History", MessageID: "first",
+			SenderJID: "alice@s.whatsapp.net", Timestamp: now, Text: "first snapshot", MessageType: "text",
+		}},
+	}
+	if err := source.ImportSnapshot(ctx, data, "/fixture", now); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := filepath.Join(t.TempDir(), "backup")
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	identity := filepath.Join(t.TempDir(), "age.key")
+	configPath := filepath.Join(t.TempDir(), "backup.json")
+	if _, _, err := Init(ctx, Options{ConfigPath: configPath, Repo: repo, Remote: remote, Identity: identity, Push: false}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(ctx, source, Options{ConfigPath: configPath, Push: false, Tag: "snapshot/initial"}); err != nil {
+		t.Fatal(err)
+	}
+	idempotent, err := Push(ctx, source, Options{ConfigPath: configPath, Push: false, Tag: "snapshot/initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idempotent.Changed || idempotent.Tag != "snapshot/initial" {
+		t.Fatalf("unexpected idempotent tagged push: %+v", idempotent)
+	}
+	initial, err := resolveCommit(ctx, repo, "snapshot/initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data.Messages = append(data.Messages, store.Message{
+		SourcePK: 2, ChatJID: "chat@g.us", ChatName: "History", MessageID: "second",
+		SenderJID: "alice@s.whatsapp.net", Timestamp: now.Add(time.Minute), Text: "second snapshot", MessageType: "text",
+	})
+	if err := source.ImportSnapshot(ctx, data, "/fixture", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(ctx, source, Options{ConfigPath: configPath, Push: false}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current == initial {
+		t.Fatal("updated backup did not create a new snapshot commit")
+	}
+	tagged, err := Push(ctx, source, Options{ConfigPath: configPath, Push: true, Tag: "snapshot/current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tagged.Changed || tagged.Tag != "snapshot/current" {
+		t.Fatalf("unexpected unchanged tagged push: %+v", tagged)
+	}
+	remoteTags, err := gitOutput(ctx, repo, "ls-remote", "--tags", "origin", "refs/tags/snapshot/current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(remoteTags), "refs/tags/snapshot/current") {
+		t.Fatalf("snapshot tag was not pushed: %s", remoteTags)
+	}
+
+	snapshots, snapshotsRepo, err := Snapshots(ctx, Options{ConfigPath: configPath, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshotsRepo != repo || len(snapshots) != 2 {
+		t.Fatalf("unexpected snapshots repo=%s snapshots=%+v", snapshotsRepo, snapshots)
+	}
+	if snapshots[0].Ref != current || snapshots[0].Counts.Messages != 2 || len(snapshots[0].Tags) != 1 || snapshots[0].Tags[0] != "snapshot/current" {
+		t.Fatalf("unexpected current snapshot: %+v", snapshots[0])
+	}
+	if snapshots[1].Ref != initial || len(snapshots[1].Tags) != 1 || snapshots[1].Tags[0] != "snapshot/initial" {
+		t.Fatalf("unexpected tagged snapshot: %+v", snapshots[1])
+	}
+	peer := filepath.Join(t.TempDir(), "peer")
+	runGit(t, "", "clone", remote, peer)
+	if err := os.WriteFile(filepath.Join(peer, "remote-note.txt"), []byte("remote advanced\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, peer, "add", "remote-note.txt")
+	runGit(t, peer, "commit", "-m", "test: advance remote")
+	runGit(t, peer, "push", "origin", "HEAD")
+	remoteHead, err := resolveCommit(ctx, peer, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteHead == current {
+		t.Fatal("remote test commit did not advance")
+	}
+
+	restored := openFixtureStore(t, "history-restored.db")
+	pulled, err := Pull(ctx, restored, Options{ConfigPath: configPath, Ref: "snapshot/initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pulled.Messages != 1 || pulled.Ref != initial {
+		t.Fatalf("unexpected historical pull: %+v", pulled)
+	}
+	after, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != current {
+		t.Fatalf("historical pull changed checkout: before=%s after=%s", current, after)
+	}
+	results, err := restored.Search(ctx, store.MessageFilter{Query: "snapshot", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].MessageID != "first" {
+		t.Fatalf("historical restore mismatch: %+v", results)
+	}
+	if _, err := Pull(ctx, restored, Options{ConfigPath: configPath, Ref: "missing-ref"}); err == nil {
+		t.Fatal("missing historical ref should fail")
+	}
+	if _, err := Push(ctx, source, Options{ConfigPath: configPath, Push: false, Tag: "snapshot/initial"}); err == nil {
+		t.Fatal("moving an existing snapshot tag should fail")
+	}
+}
+
+func TestSnapshotHistoryValidation(t *testing.T) {
+	ctx := context.Background()
+	repo := filepath.Join(t.TempDir(), "backup")
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	configPath := filepath.Join(t.TempDir(), "backup.json")
+	if _, _, err := Init(ctx, Options{ConfigPath: configPath, Repo: repo, Remote: remote, Identity: filepath.Join(t.TempDir(), "age.key"), Push: false}); err != nil {
+		t.Fatal(err)
+	}
+	snapshots, _, err := Snapshots(ctx, Options{ConfigPath: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 0 {
+		t.Fatalf("new backup repo should have no data snapshots: %+v", snapshots)
+	}
+	if _, _, err := Snapshots(ctx, Options{ConfigPath: configPath, Limit: -1}); err == nil {
+		t.Fatal("negative snapshot limit should fail")
+	}
+	if err := validateSnapshotTag(ctx, repo, "not a tag"); err == nil {
+		t.Fatal("invalid snapshot tag should fail")
+	}
+	if tag, err := tagSnapshot(ctx, Config{Repo: repo}, ""); err != nil || tag != "" {
+		t.Fatalf("empty snapshot tag = %q, %v", tag, err)
+	}
+	if _, err := resolveCommit(ctx, repo, ""); err == nil {
+		t.Fatal("empty backup ref should fail")
+	}
+	if _, err := decodeManifest([]byte("{")); err == nil {
+		t.Fatal("invalid manifest JSON should fail")
+	}
+	if got := shortRef("short"); got != "short" {
+		t.Fatalf("short ref = %q", got)
+	}
+}
+
 func TestConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "backup.json")
 	cfg := DefaultConfig()

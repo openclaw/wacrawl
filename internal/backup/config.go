@@ -27,6 +27,9 @@ type Options struct {
 	Identity   string
 	Recipients []string
 	Push       bool
+	Ref        string
+	Tag        string
+	Limit      int
 }
 
 func DefaultConfig() Config {

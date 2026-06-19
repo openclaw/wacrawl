@@ -328,6 +328,9 @@ wacrawl backup push
 # Pull the Git backup, decrypt, verify, and import into the local archive.
 wacrawl backup pull
 
+# List restorable commits and any snapshot tags.
+wacrawl backup snapshots
+
 # Inspect the backup manifest without decrypting message data.
 wacrawl backup status
 ```
@@ -341,14 +344,26 @@ wacrawl --sync always backup push
 # Write and commit locally, but do not push to GitHub.
 wacrawl backup push --no-push
 
+# Create a named checkpoint while pushing a backup.
+wacrawl backup push --tag snapshot/before-phone-migration
+
 # Restore into a throwaway database for testing.
 wacrawl --db /tmp/wacrawl-restore-test.db backup pull
 wacrawl --db /tmp/wacrawl-restore-test.db --sync never status
+
+# Restore a historical tag, commit, or branch without changing the backup checkout.
+wacrawl --db /tmp/wacrawl-history.db backup pull --ref snapshot/before-phone-migration
 ```
 
 You should not need to run `git` manually for normal use. `backup push` handles
 the backup repo pull/rebase, commit, and push. `backup pull` handles the backup
 repo pull/rebase before decrypting.
+
+Every changed backup is already a Git commit. Use `--tag NAME` to add an
+optional named checkpoint without moving an existing tag. Tag names and commit
+metadata are visible to anyone who can inspect the Git repository, so keep tag
+names non-sensitive. `backup snapshots` lists the newest manifest-changing
+commits and their tags; use `--limit N` to control the history depth.
 
 ### Encryption and Security Model
 
@@ -456,6 +471,10 @@ shard, encrypts each shard for every configured recipient, updates
 `manifest.json`, removes stale encrypted shards, commits, and pushes the backup
 repo.
 
+Pass `--tag NAME` to tag the resulting snapshot commit. If the archive is
+unchanged, the tag points at the existing current snapshot. Existing tags are
+never moved to a different commit.
+
 Re-running `backup push` without archive changes leaves Git clean. The command
 prints the repo path, whether anything changed, whether the backup is encrypted,
 the shard count, and the message count.
@@ -479,6 +498,16 @@ wacrawl backup pull
 the local age identity, verifies each plaintext shard hash from the manifest,
 validates cross-table references, and replaces the configured `wacrawl` archive
 database in one import transaction.
+
+Restore a historical tag, commit, or branch with `--ref`:
+
+```bash
+wacrawl --db /tmp/wacrawl-history.db backup pull --ref snapshot/before-phone-migration
+```
+
+Historical restore resolves the ref to a commit and reads its manifest and
+encrypted shards directly from Git objects. It does not checkout that commit or
+change the backup repository's current branch.
 
 To test a restore without touching your real archive:
 

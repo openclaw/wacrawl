@@ -50,6 +50,8 @@ type Result struct {
 	Encrypted bool   `json:"encrypted"`
 	Shards    int    `json:"shards"`
 	Messages  int    `json:"messages"`
+	Ref       string `json:"ref,omitempty"`
+	Tag       string `json:"tag,omitempty"`
 }
 
 func Init(ctx context.Context, opts Options) (Config, string, error) {
@@ -92,6 +94,9 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err := ensureRepo(ctx, cfg); err != nil {
 		return Result{}, err
 	}
+	if err := validateSnapshotTag(ctx, cfg.Repo, opts.Tag); err != nil {
+		return Result{}, err
+	}
 	if err := writeBackupReadme(cfg.Repo); err != nil {
 		return Result{}, err
 	}
@@ -104,11 +109,21 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	changed, err := commitAndPush(ctx, cfg, "sync: update encrypted wacrawl backup", opts.Push)
+	pushWithTag := opts.Push && strings.TrimSpace(opts.Tag) != ""
+	changed, err := commitAndPush(ctx, cfg, "sync: update encrypted wacrawl backup", opts.Push && !pushWithTag)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Repo: cfg.Repo, Changed: changed, Encrypted: true, Shards: len(manifest.Shards), Messages: manifest.Counts.Messages}, nil
+	tag, err := tagSnapshot(ctx, cfg, opts.Tag)
+	if err != nil {
+		return Result{}, err
+	}
+	if pushWithTag {
+		if err := git(ctx, cfg.Repo, "push", "--atomic", "-u", "origin", "HEAD", "refs/tags/"+tag); err != nil {
+			return Result{}, err
+		}
+	}
+	return Result{Repo: cfg.Repo, Changed: changed, Encrypted: true, Shards: len(manifest.Shards), Messages: manifest.Counts.Messages, Tag: tag}, nil
 }
 
 func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
@@ -116,24 +131,37 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := ensureRepo(ctx, cfg); err != nil {
+	ensure := ensureRepo
+	if strings.TrimSpace(opts.Ref) != "" {
+		ensure = ensureRepoForRead
+	}
+	if err := ensure(ctx, cfg); err != nil {
 		return Result{}, err
 	}
-	manifest, err := readManifest(cfg.Repo)
+	manifest, ref, err := readManifestAtRef(ctx, cfg.Repo, opts.Ref)
 	if err != nil {
 		return Result{}, err
 	}
-	data, err := readSnapshot(cfg, manifest)
+	var data store.SnapshotData
+	if ref == "" {
+		data, err = readSnapshot(cfg, manifest)
+	} else {
+		data, err = readSnapshotAtRef(ctx, cfg, manifest, ref)
+	}
 	if err != nil {
 		return Result{}, err
 	}
 	if err := data.Validate(); err != nil {
 		return Result{}, err
 	}
-	if err := st.ImportSnapshot(ctx, data, "backup:"+cfg.Repo, manifest.Exported); err != nil {
+	sourcePath := "backup:" + cfg.Repo
+	if ref != "" {
+		sourcePath += "@" + ref
+	}
+	if err := st.ImportSnapshot(ctx, data, sourcePath, manifest.Exported); err != nil {
 		return Result{}, err
 	}
-	return Result{Repo: cfg.Repo, Changed: true, Encrypted: manifest.Encrypted, Shards: len(manifest.Shards), Messages: len(data.Messages)}, nil
+	return Result{Repo: cfg.Repo, Changed: true, Encrypted: manifest.Encrypted, Shards: len(manifest.Shards), Messages: len(data.Messages), Ref: ref}, nil
 }
 
 func Status(ctx context.Context, opts Options) (Manifest, string, error) {
@@ -216,12 +244,18 @@ func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, old
 }
 
 func readSnapshot(cfg Config, manifest Manifest) (store.SnapshotData, error) {
+	return readSnapshotWith(manifest, func(shard ShardEntry) ([]byte, error) {
+		return decryptShardFile(cfg, shard)
+	})
+}
+
+func readSnapshotWith(manifest Manifest, load func(ShardEntry) ([]byte, error)) (store.SnapshotData, error) {
 	if manifest.Format != formatVersion {
 		return store.SnapshotData{}, fmt.Errorf("unsupported backup format %d", manifest.Format)
 	}
 	var data store.SnapshotData
 	for _, shard := range manifest.Shards {
-		plaintext, err := decryptShardFile(cfg, shard)
+		plaintext, err := load(shard)
 		if err != nil {
 			return store.SnapshotData{}, err
 		}
@@ -387,11 +421,7 @@ func readManifest(repo string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	var manifest Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, err
-	}
-	return manifest, nil
+	return decodeManifest(data)
 }
 
 func writeManifest(repo string, manifest Manifest) error {
@@ -546,21 +576,28 @@ may still contain shards decryptable by the compromised key.
 
 ` + "```bash" + `
 wacrawl backup push
+wacrawl backup push --tag snapshot/before-phone-migration
 ` + "```" + `
 
 The command pulls/rebases this checkout, refreshes the local wacrawl archive
 according to the normal sync policy, writes encrypted shards, updates the
 manifest, commits, and pushes this repository.
 
+Every changed backup is a Git commit. Optional tags name important checkpoints;
+tag names are visible Git metadata and should not contain sensitive text.
+
 ## Restore
 
 ` + "```bash" + `
 wacrawl backup pull
+wacrawl backup snapshots
+wacrawl --db /tmp/wacrawl-history.db backup pull --ref snapshot/before-phone-migration
 ` + "```" + `
 
 ` + "`backup pull`" + ` decrypts every shard with the local age identity, verifies the
 manifest hashes, validates the snapshot, and imports it into the configured
-wacrawl archive database.
+wacrawl archive database. Historical refs are read directly from Git objects
+without changing this checkout's current branch.
 
 ## Recovery
 

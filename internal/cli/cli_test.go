@@ -310,8 +310,8 @@ func TestRunHelpMenus(t *testing.T) {
 		want string
 	}{
 		{"global short", []string{"--help"}, "Examples:"},
-		{"backup help", []string{"backup", "help"}, "wacrawl backup <init|push|pull|status>"},
-		{"backup topic", []string{"help", "backup"}, "wacrawl backup <init|push|pull|status>"},
+		{"backup help", []string{"backup", "help"}, "wacrawl backup <init|push|pull|status|snapshots>"},
+		{"backup topic", []string{"help", "backup"}, "wacrawl backup <init|push|pull|status|snapshots>"},
 		{"doctor topic", []string{"help", "doctor"}, "wacrawl doctor [--source PATH]"},
 		{"command help topic", []string{"help", "messages"}, "wacrawl messages [flags]"},
 		{"doctor flag", []string{"doctor", "--help"}, "wacrawl doctor [--source PATH]"},
@@ -326,11 +326,12 @@ func TestRunHelpMenus(t *testing.T) {
 		{"sql flag", []string{"sql", "--help"}, "read-only SQL query"},
 		{"import flag", []string{"import", "--help"}, "--copy-media"},
 		{"sync topic", []string{"help", "sync"}, "wacrawl sync [--source PATH]"},
-		{"backup flag", []string{"backup", "--help"}, "wacrawl backup <init|push|pull|status>"},
+		{"backup flag", []string{"backup", "--help"}, "wacrawl backup <init|push|pull|status|snapshots>"},
 		{"backup nested flag", []string{"backup", "init", "--help"}, "wacrawl backup init [flags]"},
 		{"backup nested topic", []string{"backup", "help", "push"}, "wacrawl backup push [flags]"},
 		{"backup pull topic", []string{"help", "backup", "pull"}, "wacrawl backup pull [flags]"},
 		{"backup status topic", []string{"help", "backup", "status"}, "wacrawl backup status [flags]"},
+		{"backup snapshots topic", []string{"help", "backup", "snapshots"}, "wacrawl backup snapshots [flags]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -530,11 +531,37 @@ func TestBackupCommands(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run(ctx, []string{"--db", dbPath, "--sync", "never", "backup", "push", "--config", config, "--no-push"}, &stdout, &stderr); err != nil {
+	if err := Run(ctx, []string{"--db", dbPath, "--sync", "never", "backup", "push", "--config", config, "--no-push", "--tag", "snapshot/initial"}, &stdout, &stderr); err != nil {
 		t.Fatalf("backup push error = %v stderr=%s", err, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "encrypted=true") || !strings.Contains(stdout.String(), "messages=3") {
+	if !strings.Contains(stdout.String(), "encrypted=true") || !strings.Contains(stdout.String(), "messages=3") || !strings.Contains(stdout.String(), "tag=snapshot/initial") {
 		t.Fatalf("backup push output mismatch:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"backup", "snapshots", "--config", config}, &stdout, &stderr); err != nil {
+		t.Fatalf("backup snapshots error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "snapshot/initial") || !strings.Contains(stdout.String(), "MESSAGES") {
+		t.Fatalf("backup snapshots output mismatch:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--json", "backup", "snapshots", "--config", config, "--limit", "1"}, &stdout, &stderr); err != nil {
+		t.Fatalf("JSON backup snapshots error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"repo"`) || !strings.Contains(stdout.String(), `"snapshots"`) || !strings.Contains(stdout.String(), `"ref"`) {
+		t.Fatalf("JSON backup snapshots output mismatch:\n%s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"backup", "snapshots", "--config", config, "--limit", "0"}, &stdout, &stderr); err == nil || ExitCode(err) != 2 {
+		t.Fatalf("invalid backup snapshots limit error = %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"backup", "snapshots", "--config", config, "extra"}, &stdout, &stderr); err == nil || ExitCode(err) != 2 {
+		t.Fatalf("backup snapshots positional argument error = %v", err)
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -547,8 +574,11 @@ func TestBackupCommands(t *testing.T) {
 	restoredDB := filepath.Join(t.TempDir(), "restored.db")
 	stdout.Reset()
 	stderr.Reset()
-	if err := Run(ctx, []string{"--db", restoredDB, "backup", "pull", "--config", config}, &stdout, &stderr); err != nil {
+	if err := Run(ctx, []string{"--db", restoredDB, "backup", "pull", "--config", config, "--ref", "snapshot/initial"}, &stdout, &stderr); err != nil {
 		t.Fatalf("backup pull error = %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ref=") {
+		t.Fatalf("backup pull should report resolved ref:\n%s", stdout.String())
 	}
 	stdout.Reset()
 	stderr.Reset()

@@ -581,7 +581,28 @@ func (a *app) print(value any) error {
 		return tw.Flush()
 	case backup.Result:
 		_, err := fmt.Fprintf(a.stdout, "repo=%s\nchanged=%t\nencrypted=%t\nshards=%d\nmessages=%d\n", v.Repo, v.Changed, v.Encrypted, v.Shards, v.Messages)
+		if err == nil && v.Ref != "" {
+			_, err = fmt.Fprintf(a.stdout, "ref=%s\n", v.Ref)
+		}
+		if err == nil && v.Tag != "" {
+			_, err = fmt.Fprintf(a.stdout, "tag=%s\n", v.Tag)
+		}
 		return err
+	case []backup.Snapshot:
+		if len(v) == 0 {
+			_, err := fmt.Fprintln(a.stdout, "No backup snapshots found.")
+			return err
+		}
+		tw := tabwriter.NewWriter(a.stdout, 2, 4, 2, ' ', 0)
+		_, _ = fmt.Fprintln(tw, "REF\tEXPORTED\tMESSAGES\tSHARDS\tTAGS")
+		for _, snapshot := range v {
+			ref := snapshot.Ref
+			if len(ref) > 12 {
+				ref = ref[:12]
+			}
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\n", ref, formatTime(snapshot.Exported), snapshot.Counts.Messages, snapshot.Shards, strings.Join(snapshot.Tags, ","))
+		}
+		return tw.Flush()
 	case backup.Manifest:
 		_, err := fmt.Fprintf(a.stdout, "encrypted=%t\nshards=%d\nmessages=%d\nexported=%s\n", v.Encrypted, len(v.Shards), v.Counts.Messages, formatTime(v.Exported))
 		return err
@@ -783,13 +804,14 @@ Examples:
 		_, _ = fmt.Fprint(w, `Manage encrypted Git backups of the wacrawl archive.
 
 Usage:
-  wacrawl backup <init|push|pull|status> [flags]
+  wacrawl backup <init|push|pull|status|snapshots> [flags]
 
 Commands:
   init      Create backup config, age identity, and first encrypted backup.
   push      Export the archive and push encrypted shards.
   pull      Restore encrypted shards into the configured archive DB.
   status    Inspect backup config and manifest.
+  snapshots List restorable Git backup snapshots and tags.
 
 Common flags:
   --config PATH      Backup config path.
@@ -801,6 +823,7 @@ Common flags:
 
 Examples:
   wacrawl backup status
+  wacrawl backup snapshots
   wacrawl backup push
   wacrawl --sync never backup push
   wacrawl backup init --repo ~/Projects/backup-wacrawl --remote https://github.com/steipete/backup-wacrawl.git
@@ -832,6 +855,7 @@ Flags:
   --identity PATH    Age identity path.
   --recipient AGE    Age recipient. Repeatable.
   --no-push          Commit locally without pushing.
+  --tag NAME         Tag the resulting backup commit.
 `)
 	case "backup pull":
 		_, _ = fmt.Fprint(w, `Restore encrypted archive shards into the archive database.
@@ -844,6 +868,7 @@ Flags:
   --repo PATH        Backup Git repository path.
   --remote URL       Backup Git remote.
   --identity PATH    Age identity path.
+  --ref REF          Restore a tag, commit, or branch without changing checkout.
 `)
 	case "backup status":
 		_, _ = fmt.Fprint(w, `Show encrypted backup status and manifest metadata.
@@ -856,6 +881,18 @@ Flags:
   --repo PATH        Backup Git repository path.
   --remote URL       Backup Git remote.
   --identity PATH    Age identity path.
+`)
+	case "backup snapshots":
+		_, _ = fmt.Fprint(w, `List restorable encrypted backup snapshots from Git history.
+
+Usage:
+  wacrawl backup snapshots [flags]
+
+Flags:
+  --config PATH      Backup config path.
+  --repo PATH        Backup Git repository path.
+  --remote URL       Backup Git remote.
+  --limit N          Maximum snapshots to list. Default: 20.
 `)
 	default:
 		return false
