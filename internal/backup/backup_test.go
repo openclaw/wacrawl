@@ -91,7 +91,7 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if strings.Contains(string(ciphertext), "secret launch text") {
 		t.Fatal("encrypted shard contains plaintext")
 	}
-	manifestBody, err := os.ReadFile(filepath.Join(repo, "manifest.json"))
+	manifestBody, err := os.ReadFile(filepath.Join(repo, "manifest.json")) // #nosec G304 -- test reads the manifest from its temp backup repo.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if results[0].MediaPath != wantRestoredMedia {
 		t.Fatalf("restored media path = %q, want %q", results[0].MediaPath, wantRestoredMedia)
 	}
-	mediaBody, err := os.ReadFile(wantRestoredMedia)
+	mediaBody, err := os.ReadFile(wantRestoredMedia) // #nosec G304 -- test reads its expected temp restore path.
 	if err != nil || string(mediaBody) != "private media bytes" {
 		t.Fatalf("restored media = %q err=%v", mediaBody, err)
 	}
@@ -212,7 +212,7 @@ func TestReplaceMediaDuringRollsBackFailedImport(t *testing.T) {
 	if err := replaceMediaDuring(staged, target, func() error { return wantErr }); !errors.Is(err, wantErr) {
 		t.Fatalf("replace error = %v", err)
 	}
-	if body, err := os.ReadFile(filepath.Join(target, "old")); err != nil || string(body) != "old" {
+	if body, err := os.ReadFile(filepath.Join(target, "old")); err != nil || string(body) != "old" { // #nosec G304 -- test reads its temp media target.
 		t.Fatalf("previous media was not restored: %q err=%v", body, err)
 	}
 	if _, err := os.Stat(filepath.Join(target, "new")); !os.IsNotExist(err) {
@@ -228,7 +228,7 @@ func TestReplaceMediaDuringRollsBackFailedImport(t *testing.T) {
 	if err := replaceMediaDuring(staged, target, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" {
+	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" { // #nosec G304 -- test reads its temp media target.
 		t.Fatalf("promoted media = %q err=%v", body, err)
 	}
 	if _, err := os.Stat(filepath.Join(target, "old")); !os.IsNotExist(err) {
@@ -266,7 +266,7 @@ func TestReplaceMediaDuringValidatesAndHandlesNoPreviousMedia(t *testing.T) {
 	if err := replaceMediaDuring(staged, target, func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" {
+	if body, err := os.ReadFile(filepath.Join(target, "new")); err != nil || string(body) != "new" { // #nosec G304 -- test reads its temp media target.
 		t.Fatalf("new media without previous directory = %q err=%v", body, err)
 	}
 }

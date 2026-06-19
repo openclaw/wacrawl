@@ -170,7 +170,7 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 		if err != nil {
 			return Result{}, err
 		}
-		defer os.RemoveAll(stageRoot)
+		defer func() { _ = os.RemoveAll(stageRoot) }()
 		if ref == "" {
 			_, err = ckbackup.RestoreFilesUnder(ctx, crawlkitConfig(cfg), toCrawlkitManifest(manifest), stageRoot, "media")
 		} else {

@@ -589,7 +589,7 @@ func TestBackupCommands(t *testing.T) {
 		t.Fatalf("restored search mismatch:\n%s", stdout.String())
 	}
 	restoredMedia := filepath.Join(filepath.Dir(restoredDB), "media", "Media", "123@g.us", "a", "test.jpg")
-	if body, err := os.ReadFile(restoredMedia); err != nil || string(body) != "image" {
+	if body, err := os.ReadFile(restoredMedia); err != nil || string(body) != "image" { // #nosec G304 -- test reads its expected temp restore path.
 		t.Fatalf("restored media = %q err=%v", body, err)
 	}
 }
