@@ -278,6 +278,20 @@ func TestLocalizeMediaPathsRejectsEscape(t *testing.T) {
 	}
 }
 
+func TestDecodeSnapshotRejectsInvalidShards(t *testing.T) {
+	for _, table := range []string{"contacts", "chats", "groups", "group_participants", "messages", "unknown"} {
+		t.Run(table, func(t *testing.T) {
+			shard := ckbackup.DecodedShard{
+				Entry:     ckbackup.ShardEntry{Table: table},
+				Plaintext: []byte("{"),
+			}
+			if _, err := decodeSnapshot([]ckbackup.DecodedShard{shard}); err == nil {
+				t.Fatal("invalid shard should fail")
+			}
+		})
+	}
+}
+
 func TestHistoricalSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	source := openFixtureStore(t, "history-source.db")
