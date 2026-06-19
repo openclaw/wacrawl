@@ -450,7 +450,7 @@ data/groups.jsonl.gz.age
 data/group_participants.jsonl.gz.age
 data/messages/YYYY/MM.jsonl.gz.age
 data/files/index*.jsonl.gz.age
-data/files/HH/SHA256.gz.age
+data/files/objects/OPAQUE_ID.gz.age
 ` + "```" + `
 
 ` + "`manifest.json`" + ` is cleartext and contains format version, export time,

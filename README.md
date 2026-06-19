@@ -305,7 +305,7 @@ data/groups.jsonl.gz.age
 data/group_participants.jsonl.gz.age
 data/messages/YYYY/MM.jsonl.gz.age
 data/files/index*.jsonl.gz.age
-data/files/HH/SHA256.gz.age
+data/files/objects/OPAQUE_ID.gz.age
 ```
 
 `manifest.json` is intentionally cleartext so a machine can inspect backup
@@ -315,8 +315,9 @@ message text, chat names, contacts, participant IDs, media metadata, filenames,
 or archive paths. Those fields live inside the `*.jsonl.gz.age` shards.
 
 Media previously copied with `wacrawl sync --copy-media` is included by default.
-Identical files share one encrypted content-addressed blob. Use `backup push
---no-media` or `backup pull --no-media` when only archive rows are wanted.
+Identical files share one encrypted blob with a random opaque object ID. Their
+content hashes remain inside the encrypted index. Use `backup push --no-media`
+or `backup pull --no-media` when only archive rows are wanted.
 
 ### Command Cheat Sheet
 
@@ -414,7 +415,8 @@ What remains visible in Git:
 
 - `manifest.json` is cleartext.
 - The manifest reveals export time, public recipients, table names, row counts,
-  opaque shard paths, encrypted byte sizes, plaintext content hashes, and media counts.
+  opaque shard paths, encrypted byte sizes, row/index hashes, and media counts.
+  Individual media paths, filenames, plaintext sizes, and content hashes remain encrypted.
 - Message shard paths reveal activity by year and month, for example
   `data/messages/2026/04.jsonl.gz.age`.
 - Git history reveals backup cadence and which encrypted shards changed.
