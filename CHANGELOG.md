@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Retry concurrent encrypted backup branch-and-tag pushes after rebasing and retargeting the unpublished tag.
 - Move encrypted snapshot, Git history/tag/ref, SQLite bundle, contact export, and safe FTS query mechanics to CrawlKit while preserving the archive schema, backup manifest format, and CLI JSON contracts.
 
 ## [0.2.7] - 2026-06-10

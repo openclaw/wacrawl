@@ -110,7 +110,7 @@ func Push(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	if pushWithTag {
-		if err := mirror.PushAtomic(ctx, mirrorOptions(cfg), "HEAD", "refs/tags/"+tag); err != nil {
+		if err := mirror.PushCurrentSnapshot(ctx, mirrorOptions(cfg), tag); err != nil {
 			return Result{}, err
 		}
 	}
