@@ -37,8 +37,10 @@ type Counts struct {
 	MediaFiles   int `json:"media_files,omitempty"`
 }
 
-type ShardEntry = ckbackup.ShardEntry
-type FileEntry = ckbackup.FileEntry
+type (
+	ShardEntry = ckbackup.ShardEntry
+	FileEntry  = ckbackup.FileEntry
+)
 
 type Result struct {
 	Repo       string `json:"repo"`
