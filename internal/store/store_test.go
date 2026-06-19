@@ -184,7 +184,8 @@ func TestReplaceAllDuplicateSourcePKFails(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
-	err = st.ReplaceAll(ctx, ImportStats{FinishedAt: now}, nil,
+	err = st.ReplaceAll(
+		ctx, ImportStats{FinishedAt: now}, nil,
 		[]Chat{{JID: "chat", Kind: "dm", Name: "Chat", LastMessageAt: now}},
 		nil,
 		nil,

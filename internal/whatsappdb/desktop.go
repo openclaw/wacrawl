@@ -117,7 +117,8 @@ func Discover(ctx context.Context, path string) (Source, error) {
 		if maxDate.Valid {
 			source.NewestMessage = appleTime(maxDate.Float64).Format(time.RFC3339)
 		}
-		source.SchemaNotes = append(source.SchemaNotes,
+		source.SchemaNotes = append(
+			source.SchemaNotes,
 			"CoreData tables: ZWACHATSESSION, ZWAMESSAGE, ZWAMEDIAITEM, ZWAGROUPINFO, ZWAGROUPMEMBER",
 			"timestamps are seconds since 2001-01-01 UTC",
 			"ZWAMESSAGE.ZGROUPMEMBER identifies group senders",

@@ -599,7 +599,8 @@ func TestSyncArchiveKeepsExistingArchiveWhenSourceUnavailable(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	now := time.Now().UTC().Add(-time.Hour)
-	if err := st.ReplaceAll(ctx,
+	if err := st.ReplaceAll(
+		ctx,
 		store.ImportStats{SourcePath: "/missing", DBPath: st.Path(), FinishedAt: now},
 		nil,
 		[]store.Chat{{JID: "chat", Kind: "dm", Name: "Chat", LastMessageAt: now}},
