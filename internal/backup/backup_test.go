@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -188,6 +189,34 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	}
 	if !pushed.Changed || pushed.Messages != 2 {
 		t.Fatalf("unexpected pushed backup: %+v", pushed)
+	}
+}
+
+func TestReplaceMediaDuringRollsBackFailedImport(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "media")
+	staged := filepath.Join(dir, "staged")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "old"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "new"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("import failed")
+	if err := replaceMediaDuring(staged, target, func() error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("replace error = %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(target, "old")); err != nil || string(body) != "old" {
+		t.Fatalf("previous media was not restored: %q err=%v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "new")); !os.IsNotExist(err) {
+		t.Fatalf("failed media remained after rollback: %v", err)
 	}
 }
 

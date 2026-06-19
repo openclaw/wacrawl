@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -154,15 +155,24 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err := data.Validate(); err != nil {
+		return Result{}, err
+	}
 	root, err := archiveRoot(st.Path())
 	if err != nil {
 		return Result{}, err
 	}
-	if !opts.NoMedia {
+	stageRoot := ""
+	if !opts.NoMedia && len(manifest.Files) > 0 {
+		stageRoot, err = os.MkdirTemp(root, ".wacrawl-media-restore-")
+		if err != nil {
+			return Result{}, err
+		}
+		defer os.RemoveAll(stageRoot)
 		if ref == "" {
-			_, err = ckbackup.RestoreFilesUnder(ctx, crawlkitConfig(cfg), toCrawlkitManifest(manifest), root, "media")
+			_, err = ckbackup.RestoreFilesUnder(ctx, crawlkitConfig(cfg), toCrawlkitManifest(manifest), stageRoot, "media")
 		} else {
-			_, _, err = ckbackup.RestoreFilesAtUnder(ctx, crawlkitConfig(cfg), mirrorOptions(cfg), toCrawlkitManifest(manifest), ref, root, "media")
+			_, _, err = ckbackup.RestoreFilesAtUnder(ctx, crawlkitConfig(cfg), mirrorOptions(cfg), toCrawlkitManifest(manifest), ref, stageRoot, "media")
 		}
 		if err != nil {
 			return Result{}, err
@@ -171,14 +181,17 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 	if err := localizeMediaPaths(data.Messages, root); err != nil {
 		return Result{}, err
 	}
-	if err := data.Validate(); err != nil {
-		return Result{}, err
-	}
 	sourcePath := "backup:" + cfg.Repo
 	if ref != "" {
 		sourcePath += "@" + ref
 	}
-	if err := st.ImportSnapshot(ctx, data, sourcePath, manifest.Exported); err != nil {
+	importSnapshot := func() error { return st.ImportSnapshot(ctx, data, sourcePath, manifest.Exported) }
+	if stageRoot != "" {
+		err = replaceMediaDuring(filepath.Join(stageRoot, "media"), filepath.Join(root, "media"), importSnapshot)
+	} else {
+		err = importSnapshot()
+	}
+	if err != nil {
 		return Result{}, err
 	}
 	return Result{Repo: cfg.Repo, Changed: true, Encrypted: manifest.Encrypted, Shards: len(manifest.Shards), Messages: len(data.Messages), MediaFiles: len(manifest.Files), Ref: ref}, nil
@@ -425,6 +438,55 @@ func archiveRoot(dbPath string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(absolute), nil
+}
+
+func replaceMediaDuring(staged, target string, commit func() error) error {
+	stagedInfo, err := os.Lstat(staged)
+	if err != nil {
+		return err
+	}
+	if stagedInfo.Mode()&os.ModeSymlink != 0 || !stagedInfo.IsDir() {
+		return fmt.Errorf("staged media is not a directory: %s", staged)
+	}
+	parent := filepath.Dir(target)
+	previous, err := os.MkdirTemp(parent, ".wacrawl-media-previous-")
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(previous); err != nil {
+		return err
+	}
+	hadPrevious := false
+	if targetInfo, statErr := os.Lstat(target); statErr == nil {
+		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.IsDir() {
+			return fmt.Errorf("archive media is not a directory: %s", target)
+		}
+		if err := os.Rename(target, previous); err != nil {
+			return err
+		}
+		hadPrevious = true
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if err := os.Rename(staged, target); err != nil {
+		var restoreErr error
+		if hadPrevious {
+			restoreErr = os.Rename(previous, target)
+		}
+		return errors.Join(err, restoreErr)
+	}
+	if err := commit(); err != nil {
+		removeErr := os.RemoveAll(target)
+		var restoreErr error
+		if hadPrevious {
+			restoreErr = os.Rename(previous, target)
+		}
+		return errors.Join(err, removeErr, restoreErr)
+	}
+	if hadPrevious {
+		_ = os.RemoveAll(previous)
+	}
+	return nil
 }
 
 func writeBackupReadme(repo string) error {
