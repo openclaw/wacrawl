@@ -763,7 +763,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 -- tests pass only fixed Git commands and temporary paths.
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=wacrawl-test",
