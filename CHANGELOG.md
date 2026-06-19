@@ -7,6 +7,10 @@
 - Add read-only SQL archive queries with JSON output, automatic sync support, and lossless duplicate-column handling (#18, thanks @TurboTheTurtle).
 - Add named Git backup snapshots, snapshot history listing, and non-mutating historical restores through `backup pull --ref`.
 
+### Changed
+
+- Move encrypted snapshot, Git history/tag/ref, SQLite bundle, contact export, and safe FTS query mechanics to CrawlKit while preserving the archive schema, backup manifest format, and CLI JSON contracts.
+
 ## [0.2.7] - 2026-06-10
 
 ### Fixed

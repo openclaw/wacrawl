@@ -384,10 +384,6 @@ func TestDiscoverAndHelpers(t *testing.T) {
 	if _, _, err := openReadOnly(filepath.Join(source, "missing.sqlite")); err == nil {
 		t.Fatal("expected read-only open error")
 	}
-	if err := copyFileIfExists(filepath.Join(source, "missing.sqlite"), filepath.Join(t.TempDir(), "missing.sqlite")); err != nil {
-		t.Fatal(err)
-	}
-
 	if !appleNullTime(sql.NullFloat64{}).IsZero() {
 		t.Fatal("invalid apple null time should be zero")
 	}

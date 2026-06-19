@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openclaw/crawlkit/cache"
 	"github.com/openclaw/wacrawl/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -140,11 +141,11 @@ func SnapshotPath(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err := copySQLiteTriad(path, root, chatDBName); err != nil {
+	if _, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, chatDBName), DestinationDir: root, Name: chatDBName}); err != nil {
 		_ = os.RemoveAll(root)
 		return Snapshot{}, err
 	}
-	if err := copySQLiteTriad(path, root, contactsDBName); err != nil && !os.IsNotExist(err) {
+	if _, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, contactsDBName), DestinationDir: root, Name: contactsDBName}); err != nil && !errors.Is(err, os.ErrNotExist) {
 		_ = os.RemoveAll(root)
 		return Snapshot{}, err
 	}
@@ -755,42 +756,6 @@ func openReadOnly(path string) (*sql.DB, func(), error) {
 		return nil, nil, err
 	}
 	return db, func() { _ = db.Close() }, nil
-}
-
-func copySQLiteTriad(srcDir, dstDir, name string) error {
-	src := filepath.Join(srcDir, name)
-	if _, err := os.Stat(src); err != nil {
-		return err
-	}
-	for _, suffix := range []string{"", "-wal", "-shm"} {
-		if err := copyFileIfExists(src+suffix, filepath.Join(dstDir, name+suffix)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func copyFileIfExists(src, dst string) error {
-	in, err := os.Open(src) // #nosec G304 -- source path is the local WhatsApp container selected for readonly snapshotting.
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- destination is inside a mktemp snapshot dir.
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func appleNullTime(v sql.NullFloat64) time.Time {

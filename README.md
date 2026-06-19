@@ -356,8 +356,9 @@ wacrawl --db /tmp/wacrawl-history.db backup pull --ref snapshot/before-phone-mig
 ```
 
 You should not need to run `git` manually for normal use. `backup push` handles
-the backup repo pull/rebase, commit, and push. `backup pull` handles the backup
-repo pull/rebase before decrypting.
+the backup repo fetch/rebase, commit, and push. A normal `backup pull` syncs the
+current archive branch; `backup pull --ref` fetches refs and reads the requested
+Git objects without switching or rewriting the backup checkout.
 
 Every changed backup is already a Git commit. Use `--tag NAME` to add an
 optional named checkpoint without moving an existing tag. Tag names and commit

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	ckstore "github.com/openclaw/crawlkit/store"
 	"github.com/openclaw/wacrawl/internal/store/storedb"
 	_ "modernc.org/sqlite"
 )
@@ -455,8 +456,12 @@ func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, er
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
+	ftsQuery, err := ckstore.FTS5Terms(filter.Query, "")
+	if err != nil {
+		return nil, err
+	}
 	query := `select m.source_pk, m.chat_jid, m.chat_name, m.msg_id, m.sender_jid, m.sender_name, m.ts, m.from_me, m.text, m.raw_type, m.message_type, m.media_type, m.media_title, m.media_path, m.media_url, m.media_size, m.starred, snippet(messages_fts, 0, '[', ']', '...', 12) from messages_fts f join messages m on m.rowid=f.rowid where messages_fts match ?`
-	args := []any{filter.Query}
+	args := []any{ftsQuery}
 	query, args = applyMessageFilters(query, args, filter, true)
 	query += " order by bm25(messages_fts) limit ?"
 	args = append(args, filter.Limit)

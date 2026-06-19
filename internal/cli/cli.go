@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/openclaw/crawlkit/control"
 	"github.com/openclaw/wacrawl/internal/backup"
 	"github.com/openclaw/wacrawl/internal/store"
 	"github.com/openclaw/wacrawl/internal/whatsappdb"
@@ -205,15 +206,6 @@ func (a *app) runImport(ctx context.Context, command string, args []string) erro
 	})
 }
 
-type contactExport struct {
-	Contacts []exportedContact `json:"contacts"`
-}
-
-type exportedContact struct {
-	DisplayName  string   `json:"display_name"`
-	PhoneNumbers []string `json:"phone_numbers"`
-}
-
 func (a *app) runContacts(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] != "export" {
 		return usageErr(errors.New("contacts supports export only"))
@@ -235,12 +227,16 @@ func (a *app) runContacts(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return a.print(contactExport{Contacts: exportContacts(contacts)})
+		export := control.ContactExport{Contacts: exportContacts(contacts)}
+		if err := control.ValidateContactExport(export); err != nil {
+			return err
+		}
+		return a.print(export)
 	})
 }
 
-func exportContacts(contacts []store.Contact) []exportedContact {
-	out := make([]exportedContact, 0, len(contacts))
+func exportContacts(contacts []store.Contact) []control.Contact {
+	out := make([]control.Contact, 0, len(contacts))
 	seen := map[string]struct{}{}
 	for _, contact := range contacts {
 		name := contactDisplayName(contact)
@@ -253,7 +249,7 @@ func exportContacts(contacts []store.Contact) []exportedContact {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, exportedContact{DisplayName: name, PhoneNumbers: []string{phone}})
+		out = append(out, control.Contact{DisplayName: name, PhoneNumbers: []string{phone}})
 	}
 	return out
 }
