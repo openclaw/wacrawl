@@ -80,6 +80,37 @@ func TestQueryReadOnlySQLNormalizesValuesAndEmptyResults(t *testing.T) {
 	}
 }
 
+func TestQueryReadOnlySQLPreservesDuplicateColumnNames(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := queryReadOnlySQL(ctx, dbPath, "SELECT 1 AS n, 2 AS n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.columns) != 2 || result.columns[0] != "n" || result.columns[1] != "n_2" {
+		t.Fatalf("columns = %#v", result.columns)
+	}
+	if len(result.rows) != 1 || result.rows[0]["n"] != int64(1) || result.rows[0]["n_2"] != int64(2) {
+		t.Fatalf("rows = %#v", result.rows)
+	}
+
+	emptyAlias, err := queryReadOnlySQL(ctx, dbPath, `SELECT 1 AS ""`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(emptyAlias.columns) != 1 || emptyAlias.columns[0] != "" || emptyAlias.rows[0][""] != int64(1) {
+		t.Fatalf("empty alias result = %#v", emptyAlias)
+	}
+}
+
 func TestSQLResultJSONAndFormatting(t *testing.T) {
 	data, err := json.Marshal(sqlQueryResult{})
 	if err != nil {

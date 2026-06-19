@@ -4,7 +4,7 @@
 
 ### Added
 
-- Add read-only SQL archive queries with JSON output and automatic sync support (#18, thanks @TurboTheTurtle).
+- Add read-only SQL archive queries with JSON output, automatic sync support, and lossless duplicate-column handling (#18, thanks @TurboTheTurtle).
 
 ## [0.2.7] - 2026-06-10
 

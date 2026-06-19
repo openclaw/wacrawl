@@ -80,6 +80,7 @@ func queryReadOnlySQL(ctx context.Context, dbPath string, query string) (sqlQuer
 	if err != nil {
 		return sqlQueryResult{}, err
 	}
+	columns = uniqueSQLColumnNames(columns)
 	result := sqlQueryResult{
 		columns: columns,
 		rows:    make([]map[string]any, 0),
@@ -103,6 +104,24 @@ func queryReadOnlySQL(ctx context.Context, dbPath string, query string) (sqlQuer
 		return sqlQueryResult{}, err
 	}
 	return result, nil
+}
+
+func uniqueSQLColumnNames(columns []string) []string {
+	unique := make([]string, len(columns))
+	used := make(map[string]struct{}, len(columns))
+	for i, column := range columns {
+		base := column
+		name := base
+		for suffix := 2; ; suffix++ {
+			if _, exists := used[name]; !exists {
+				break
+			}
+			name = fmt.Sprintf("%s_%d", base, suffix)
+		}
+		unique[i] = name
+		used[name] = struct{}{}
+	}
+	return unique
 }
 
 func validateReadOnlySQL(query string) error {
