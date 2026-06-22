@@ -260,6 +260,44 @@ func TestImportSnapshotRefreshesFTS(t *testing.T) {
 	}
 }
 
+func TestSearchMatchesNonSequentialSourcePK(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	if err := st.ReplaceAll(
+		ctx,
+		ImportStats{FinishedAt: now},
+		nil,
+		[]Chat{{JID: "chat", Kind: "dm", Name: "Chat", LastMessageAt: now}},
+		nil,
+		nil,
+		[]Message{{
+			SourcePK:  9001,
+			ChatJID:   "chat",
+			ChatName:  "Chat",
+			MessageID: "non-sequential",
+			Timestamp: now,
+			Text:      "needle survives rowid mapping",
+			RawType:   0,
+		}},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := st.Search(ctx, MessageFilter{Query: "needle", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].SourcePK != 9001 || results[0].MessageID != "non-sequential" {
+		t.Fatalf("FTS rowid mapping returned wrong message: %+v", results)
+	}
+}
+
 func TestListChatsClampsOutOfRangePersistedTimestamp(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"))

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openclaw/crawlkit/cache"
+	"github.com/openclaw/wacrawl/internal/sqlitedsn"
 	"github.com/openclaw/wacrawl/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -555,7 +556,7 @@ select m.Z_PK, coalesce(c.ZCONTACTJID,''), coalesce(c.ZPARTNERNAME,''), coalesce
 from ZWAMESSAGE m
 left join ZWACHATSESSION c on c.Z_PK=m.ZCHATSESSION
 left join ZWAGROUPMEMBER gm on gm.Z_PK=m.ZGROUPMEMBER
-left join ZWAMEDIAITEM mi on mi.Z_PK=m.ZMEDIAITEM
+left join ZWAMEDIAITEM mi on mi.Z_PK=coalesce(nullif(m.ZMEDIAITEM, 0), (select mi2.Z_PK from ZWAMEDIAITEM mi2 where mi2.ZMESSAGE=m.Z_PK order by mi2.Z_PK limit 1))
 order by m.ZMESSAGEDATE asc, m.Z_PK asc`)
 	if err != nil {
 		return nil, 0, err
@@ -745,7 +746,13 @@ func openReadOnly(path string) (*sql.DB, func(), error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, nil, err
 	}
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", path)
+	dsn := sqlitedsn.File(
+		path,
+		sqlitedsn.P("mode", "ro"),
+		sqlitedsn.P("_pragma", "query_only(1)"),
+		sqlitedsn.P("_pragma", "busy_timeout(5000)"),
+		sqlitedsn.P("_pragma", "temp_store(MEMORY)"),
+	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, nil, err

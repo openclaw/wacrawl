@@ -3,6 +3,7 @@
 COVERAGE_THRESHOLD ?= 85.0
 
 build:
+	mkdir -p bin
 	go build -o bin/wacrawl ./cmd/wacrawl
 
 test:

@@ -123,6 +123,25 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 		t.Fatalf("restored media = %q err=%v", mediaBody, err)
 	}
 
+	noMediaRestored := openFixtureStore(t, "no-media-restored.db")
+	noMediaPulled, err := Pull(ctx, noMediaRestored, Options{ConfigPath: configPath, NoMedia: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if noMediaPulled.Messages != 1 || noMediaPulled.MediaFiles != 1 {
+		t.Fatalf("unexpected no-media pull result: %+v", noMediaPulled)
+	}
+	noMediaResults, err := noMediaRestored.Search(ctx, store.MessageFilter{Query: "secret", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(noMediaResults) != 1 || noMediaResults[0].MediaPath != "media/photo.jpg " {
+		t.Fatalf("no-media restore should keep logical media path, got %+v", noMediaResults)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(noMediaRestored.Path()), "media", "photo.jpg ")); !os.IsNotExist(err) {
+		t.Fatalf("no-media restore should not create local media file, stat err=%v", err)
+	}
+
 	secondIdentity := filepath.Join(t.TempDir(), "second-age.key")
 	secondRecipient, err := EnsureIdentity(secondIdentity)
 	if err != nil {

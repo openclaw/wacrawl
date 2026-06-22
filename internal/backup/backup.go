@@ -180,8 +180,10 @@ func Pull(ctx context.Context, st *store.Store, opts Options) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if err := localizeMediaPaths(data.Messages, root); err != nil {
-		return Result{}, err
+	if stageRoot != "" {
+		if err := localizeMediaPaths(data.Messages, root); err != nil {
+			return Result{}, err
+		}
 	}
 	sourcePath := "backup:" + cfg.Repo
 	if ref != "" {

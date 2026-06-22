@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/openclaw/wacrawl/internal/sqlitedsn"
 	"github.com/openclaw/wacrawl/internal/store"
 
 	_ "modernc.org/sqlite"
@@ -60,7 +61,13 @@ func queryReadOnlySQL(ctx context.Context, dbPath string, query string) (sqlQuer
 	if err := validateReadOnlySQL(query); err != nil {
 		return sqlQueryResult{}, err
 	}
-	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)&_pragma=temp_store(MEMORY)", dbPath)
+	dsn := sqlitedsn.File(
+		dbPath,
+		sqlitedsn.P("mode", "ro"),
+		sqlitedsn.P("_pragma", "query_only(1)"),
+		sqlitedsn.P("_pragma", "busy_timeout(5000)"),
+		sqlitedsn.P("_pragma", "temp_store(MEMORY)"),
+	)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return sqlQueryResult{}, fmt.Errorf("open sqlite: %w", err)

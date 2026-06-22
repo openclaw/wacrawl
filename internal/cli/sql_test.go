@@ -80,6 +80,26 @@ func TestQueryReadOnlySQLNormalizesValuesAndEmptyResults(t *testing.T) {
 	}
 }
 
+func TestQueryReadOnlySQLOpensPathWithURICharacters(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "archive?tenant=one#fragment.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := queryReadOnlySQL(ctx, dbPath, "SELECT count(*) AS n FROM messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.rows) != 1 || result.rows[0]["n"] != int64(0) {
+		t.Fatalf("rows = %#v", result.rows)
+	}
+}
+
 func TestQueryReadOnlySQLPreservesDuplicateColumnNames(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "archive.db")

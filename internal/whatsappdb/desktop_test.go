@@ -125,6 +125,54 @@ insert into ZWAGROUPMEMBER values (2, 2, '222@lid', 'Alice Duplicate', 'Alicia',
 	}
 }
 
+func TestImportDesktopReadsMediaLinkedByMessage(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `
+insert into ZWAMEDIAITEM values (2, 4, 'Media/111@s.whatsapp.net/fallback.pdf', 'https://example.invalid/fallback.enc', 'fallback title', '', 99);
+`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+
+	stats, err := Import(ctx, archive, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.MediaMessages != 2 {
+		t.Fatalf("expected media linked by ZMESSAGE to count, got %+v", stats)
+	}
+	messages, err := archive.Messages(ctx, store.MessageFilter{ChatJID: "111@s.whatsapp.net", Limit: 10, Asc: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found store.Message
+	for _, msg := range messages {
+		if msg.SourcePK == 4 {
+			found = msg
+			break
+		}
+	}
+	if found.MediaPath != filepath.Join(source, "Message", "Media", "111@s.whatsapp.net", "fallback.pdf") ||
+		found.MediaURL != "https://example.invalid/fallback.enc" ||
+		found.MediaTitle != "fallback title" ||
+		found.MediaSize != 99 {
+		t.Fatalf("media linked only through ZMESSAGE was not imported: %+v", found)
+	}
+}
+
 func TestImportDesktopUsesProfilePushNames(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()
