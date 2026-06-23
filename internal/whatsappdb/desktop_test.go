@@ -235,6 +235,27 @@ func TestSenderSkipsResolvedJIDFallback(t *testing.T) {
 	}
 }
 
+func TestCleanDesktopMediaRel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{"blank", "", ""},
+		{"current", ".", ""},
+		{"parent", "..", ""},
+		{"parent prefix", filepath.Join("..", "..", "Media", "photo.jpg"), "photo.jpg"},
+		{"absolute", filepath.Join(string(os.PathSeparator), "Media", "photo.jpg"), filepath.Join("Media", "photo.jpg")},
+		{"normal", filepath.Join("Media", "chat", "photo.jpg"), filepath.Join("Media", "chat", "photo.jpg")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cleanDesktopMediaRel(tc.path); got != tc.want {
+				t.Fatalf("cleanDesktopMediaRel(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestImportDesktopCopyMedia(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()
