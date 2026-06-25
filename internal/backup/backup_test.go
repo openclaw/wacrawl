@@ -557,6 +557,13 @@ func TestConfigRoundTrip(t *testing.T) {
 	if loaded.Repo != cfg.Repo || loaded.Recipients[0] != "age1example" {
 		t.Fatalf("config mismatch: %+v", loaded)
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %#o, want 0600", got)
+	}
 	if DefaultConfigPath() == "" {
 		t.Fatal("default config path should not be empty")
 	}
@@ -600,6 +607,60 @@ func TestConfigRoundTrip(t *testing.T) {
 	}
 	if strings.Join(resolved.Recipients, ",") != " age1two ,age1one" {
 		t.Fatalf("recipient overrides changed: %#v", resolved.Recipients)
+	}
+}
+
+func TestSaveConfigPreservesExistingConfigOnRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "backup.json")
+	original := DefaultConfig()
+	original.Repo = "~/Projects/original"
+	original.Recipients = []string{"age1original"}
+	if err := SaveConfig(path, original); err != nil {
+		t.Fatal(err)
+	}
+
+	renameErr := errors.New("rename stopped")
+	previousRename := renameConfigFile
+	renameConfigFile = func(_, _ string) error {
+		return renameErr
+	}
+	defer func() {
+		renameConfigFile = previousRename
+	}()
+
+	updated := original
+	updated.Repo = "~/Projects/updated"
+	updated.Recipients = []string{"age1updated"}
+	if err := SaveConfig(path, updated); !errors.Is(err, renameErr) {
+		t.Fatalf("SaveConfig error = %v, want %v", err, renameErr)
+	}
+
+	loaded, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Repo != original.Repo || strings.Join(loaded.Recipients, ",") != "age1original" {
+		t.Fatalf("config was replaced after failed rename: %+v", loaded)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".backup.json.") && strings.HasSuffix(entry.Name(), ".tmp") {
+			t.Fatalf("temporary config file was not cleaned up: %s", entry.Name())
+		}
+	}
+}
+
+func TestAtomicConfigWriteReportsFilesystemErrors(t *testing.T) {
+	missingParent := filepath.Join(t.TempDir(), "missing", "backup.json")
+	if err := writeFileAtomic(missingParent, []byte("{}\n"), 0o600); err == nil {
+		t.Fatal("expected missing parent error")
+	}
+	if err := syncConfigDir(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("expected missing directory sync error")
 	}
 }
 
