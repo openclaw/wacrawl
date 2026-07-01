@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>wacrawl — local archive</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <section class="locked" id="locked" hidden>
+      <p class="eyebrow">LOCAL ARCHIVE / ACCESS REQUIRED</p>
+      <h1>This window has no archive key.</h1>
+      <p>Open the private URL printed by <code>wacrawl web</code>. Restart the command if the URL is no longer available.</p>
+    </section>
+
+    <main class="shell" id="app" hidden>
+      <header class="masthead">
+        <a class="wordmark" href="#" aria-label="wacrawl home">
+          <span class="wordmark-mark" aria-hidden="true">W/</span>
+          <span>WACRAWL</span>
+        </a>
+        <form class="search" id="search-form" role="search">
+          <label class="sr-only" for="search-input">Search messages</label>
+          <span class="search-glyph" aria-hidden="true">⌕</span>
+          <input id="search-input" name="q" type="search" autocomplete="off" placeholder="Search the archive">
+          <kbd>↵</kbd>
+        </form>
+        <button class="quiet-button" id="refresh-button" type="button">
+          <span class="refresh-mark" aria-hidden="true">↻</span>
+          Refresh view
+        </button>
+      </header>
+
+      <section class="ledger" aria-label="Archive status">
+        <div class="ledger-heading">
+          <p class="eyebrow">PRIVATE / READ-ONLY / LOOPBACK</p>
+          <h1>Your message<br>field notes.</h1>
+          <p class="ledger-range" id="archive-range">Reading archive…</p>
+        </div>
+        <dl class="metrics" id="metrics">
+          <div><dt>Messages</dt><dd>—</dd></div>
+          <div><dt>Chats</dt><dd>—</dd></div>
+          <div><dt>Contacts</dt><dd>—</dd></div>
+          <div><dt>Media refs</dt><dd>—</dd></div>
+        </dl>
+      </section>
+
+      <section class="workbench">
+        <aside class="chat-rail" aria-label="Chats">
+          <div class="rail-heading">
+            <div>
+              <p class="eyebrow">INDEX 01</p>
+              <h2>Recent chats</h2>
+            </div>
+            <span class="count-badge" id="chat-count">0</span>
+          </div>
+          <div class="chat-list" id="chat-list"></div>
+        </aside>
+
+        <section class="message-panel" aria-live="polite" aria-busy="true">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow" id="panel-kicker">ARCHIVE THREAD</p>
+              <h2 id="panel-title">Select a chat</h2>
+              <p class="panel-subtitle" id="panel-subtitle">Messages remain on this machine.</p>
+            </div>
+            <button class="text-button" id="clear-search" type="button" hidden>Back to chats</button>
+          </div>
+          <div class="message-list" id="message-list">
+            <div class="empty-state">
+              <span aria-hidden="true">◎</span>
+              <p>Choose a thread from the index.</p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <footer>
+        <span id="sync-note">Archive snapshot</span>
+        <span>Served by wacrawl · no cloud · no writes</span>
+      </footer>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

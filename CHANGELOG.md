@@ -2,6 +2,10 @@
 
 ## [0.3.1] - Unreleased
 
+### Added
+
+- Add a private loopback-only web viewer for archive status, chats, messages, and search, with per-run access keys and no media/configuration/write surface (#10, thanks @greenido).
+
 ## [0.3.0] - 2026-06-19
 
 ### Added
