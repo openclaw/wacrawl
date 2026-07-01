@@ -6,6 +6,10 @@
 
 - Add a private loopback-only web viewer for archive status, chats, messages, and search, with per-run access keys and no media/configuration/write surface (#10, thanks @greenido).
 
+### Fixed
+
+- Prevent slower web viewer responses from replacing the active chat or search results.
+
 ## [0.3.0] - 2026-06-19
 
 ### Added
