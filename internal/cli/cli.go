@@ -109,6 +109,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return a.runSearch(ctx, rest[1:])
 	case "sql":
 		return a.runSQL(ctx, rest[1:])
+	case "web":
+		return a.runWeb(ctx, rest[1:])
 	case "backup":
 		return a.runBackup(ctx, rest[1:])
 	default:
@@ -628,6 +630,7 @@ Commands:
   messages    List archived messages.
   search      Search archived messages.
   sql         Run a read-only SQL query.
+  web         Browse the local archive in a private web viewer.
   backup      Init, push, pull, or inspect encrypted Git backups.
 
 Options:
@@ -648,6 +651,7 @@ Examples:
   wacrawl --json --sync never contacts export
   wacrawl --json search "invoice" --from-them --after 2026-01-01
   wacrawl sql "SELECT count(*) FROM messages"
+  wacrawl --sync never web
   wacrawl help messages
 `)
 }
@@ -795,6 +799,23 @@ Usage:
 Examples:
   wacrawl sql "SELECT count(*) FROM messages"
   wacrawl --json sql "SELECT chat_jid, count(*) FROM messages GROUP BY chat_jid"
+`)
+	case "web":
+		_, _ = fmt.Fprint(w, `Browse the local archive in a private web viewer.
+
+The viewer binds only to 127.0.0.1 and requires a random key printed in its URL.
+It reads archive status, chats, messages, and search results without serving media
+files or exposing configuration and write controls.
+
+Usage:
+  wacrawl web [--port N]
+
+Flags:
+  --port N   Loopback port. Default: choose a free random port.
+
+Examples:
+  wacrawl web
+  wacrawl --sync never web --port 8787
 `)
 	case "backup":
 		_, _ = fmt.Fprint(w, `Manage encrypted Git backups of the wacrawl archive.

@@ -73,6 +73,12 @@ Search message text:
 wacrawl search "release notes"
 ```
 
+Browse the archive locally:
+
+```bash
+wacrawl web
+```
+
 Use JSON for scripts:
 
 ```bash
@@ -115,6 +121,8 @@ wacrawl --db /tmp/wacrawl.db import
 - Replaces only the `wacrawl` archive database.
 - Does not modify WhatsApp databases, settings, contacts, chats, or media.
 - Does not use the WhatsApp network protocol.
+- Serves the optional web viewer only on IPv4 loopback with a random per-run
+  access key; the viewer exposes no archive writes, configuration, or media files.
 - Does not upload data during normal archive/search commands. `backup push`
   uploads only age-encrypted backup shards when you explicitly run it.
 
@@ -251,6 +259,30 @@ wacrawl --json sql "SELECT chat_jid, count(*) FROM messages GROUP BY chat_jid OR
 
 Only single read-only `SELECT` statements are accepted. Use `--db PATH` to query
 an alternate archive database.
+
+### `web`
+
+Browse archive status, recent chats, messages, and full-text search in a local
+web viewer:
+
+```bash
+wacrawl web
+```
+
+The command prints a private URL and keeps running until you press Ctrl-C. It
+binds only to `127.0.0.1`, chooses a free random port by default, and protects
+archive APIs with a random key stored in the URL fragment so browsers do not
+send it in requests or referrers. The page consumes the key into memory and
+removes it from the address bar. Use a fixed loopback port when useful:
+
+```bash
+wacrawl --sync never web --port 8787
+```
+
+The viewer is deliberately read-only. It does not serve media bytes or paths,
+change archive or backup configuration, schedule syncs, or expose a non-local
+listen address. The normal global sync policy runs once before the viewer
+starts; use the CLI to sync again, then select **Refresh view** in the browser.
 
 ## Sync Behavior
 
