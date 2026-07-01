@@ -58,7 +58,7 @@ jobs:
 
       - name: Checkout release tag
         if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: git checkout -- "$RELEASE_TAG"
+        run: git checkout --detach "$RELEASE_TAG"
 
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
