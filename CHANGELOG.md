@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Save backup configuration atomically with owner-only permissions to protect existing settings from interrupted writes (#25, thanks @TurboTheTurtle).
 - Prevent stale web viewer responses from replacing active content, and preserve the current view when refresh metadata is temporarily unavailable.
 
 ## [0.3.0] - 2026-06-19
