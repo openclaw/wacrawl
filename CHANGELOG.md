@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- Prevent slower web viewer responses from replacing the active chat or search results.
+- Prevent stale web viewer responses from replacing active content, and preserve the current view when refresh metadata is temporarily unavailable.
 
 ## [0.3.0] - 2026-06-19
 

@@ -297,6 +297,7 @@
 
   async function load() {
     const request = ++state.viewRequest;
+    const interruptedLoadingView = elements.messagePanel.getAttribute("aria-busy") === "true";
     elements.refresh.disabled = true;
     elements.messagePanel.setAttribute("aria-busy", "true");
     try {
@@ -309,7 +310,7 @@
     } catch (error) {
       if (request !== state.viewRequest) return;
       showToast(error.message);
-      await reloadCurrentView(state.chats);
+      if (interruptedLoadingView) await reloadCurrentView(state.chats);
     } finally {
       elements.refresh.disabled = false;
       if (request === state.viewRequest) {
