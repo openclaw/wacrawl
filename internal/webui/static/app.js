@@ -283,6 +283,18 @@
     }
   }
 
+  async function reloadCurrentView(chats) {
+    if (state.searching) {
+      const query = elements.searchInput.value.trim();
+      if (query) {
+        await runSearch(query);
+        return;
+      }
+    }
+    const chat = chats.find((item) => item.jid === state.selectedChat) || chats[0];
+    if (chat) await selectChat(chat);
+  }
+
   async function load() {
     const request = ++state.viewRequest;
     elements.refresh.disabled = true;
@@ -293,18 +305,11 @@
       renderStatus(status);
       state.chats = chats;
       renderChats(chats);
-      if (state.searching) {
-        const query = elements.searchInput.value.trim();
-        if (query) await runSearch(query);
-      } else if (state.selectedChat) {
-        const current = chats.find((chat) => chat.jid === state.selectedChat);
-        if (current) await selectChat(current);
-      } else if (chats[0]) {
-        await selectChat(chats[0]);
-      }
+      await reloadCurrentView(chats);
     } catch (error) {
       if (request !== state.viewRequest) return;
       showToast(error.message);
+      await reloadCurrentView(state.chats);
     } finally {
       elements.refresh.disabled = false;
       if (request === state.viewRequest) {
