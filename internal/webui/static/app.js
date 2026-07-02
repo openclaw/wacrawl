@@ -1031,19 +1031,20 @@
 
   async function selectChat(chat, keepSearchText) {
     const request = ++state.viewRequest;
+    const leavingMessageSearch = state.searching;
     state.searching = false;
     state.selectedChat = chat;
     state.messages = [];
     state.seenMessageIds = new Set();
-    const searchWasFiltering = !keepSearchText && elements.searchInput.value !== "";
+    const searchChangesSidebar = elements.searchInput.value !== "" && (!keepSearchText || leavingMessageSearch);
     if (!keepSearchText) {
       elements.searchInput.value = "";
       elements.searchClear.hidden = true;
     }
     resetMediaCache();
-    // Only rebuild the list when clearing a text filter actually changes its
-    // contents; otherwise just move the highlight.
-    if (searchWasFiltering) renderChats();
+    // Rebuild only when text starts or stops filtering the chat list;
+    // otherwise just move the highlight.
+    if (searchChangesSidebar) renderChats();
     else setActiveChat(chat.jid);
     showChatView();
     setChatHeader(chat);
@@ -1269,6 +1270,9 @@
       elements.searchInput.select();
     }
     if (event.key === "Escape") {
+      // The lightbox installs its own Escape handler after this global one.
+      // Leave navigation untouched so that handler can close only the overlay.
+      if (document.querySelector(".lightbox")) return;
       if (typing) {
         event.target.blur();
         return;
