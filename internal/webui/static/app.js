@@ -1253,10 +1253,12 @@
 
   elements.backButton.addEventListener("click", () => {
     state.viewRequest += 1;
+    const searchChangesSidebar = state.searching && elements.searchInput.value !== "";
     state.searching = false;
     state.selectedChat = null;
     resetMediaCache();
-    setActiveChat("");
+    if (searchChangesSidebar) renderChats();
+    else setActiveChat("");
     showIntro();
   });
 
