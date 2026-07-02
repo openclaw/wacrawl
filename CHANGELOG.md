@@ -6,6 +6,8 @@
 
 - Add a private loopback-only web viewer for archive status, chats, messages, and search, with per-run access keys and no media/configuration/write surface (#10, thanks @greenido).
 - Redesign the web viewer as a WhatsApp-style two-pane reader with dark/light/auto themes, deterministic contact avatars, message bubbles with day separators, WhatsApp text formatting and markdown rendering, media and starred indicators, chat filters, highlighted search results, and older-message pagination.
+- Render photo, sticker, and GIF attachments inline in the web viewer with lazy loading and a lightbox, served read-only from local media files through the authenticated loopback API (images only, content-sniffed, size-capped, paths never exposed).
+- Keep the web viewer chat list stable when opening a chat: the selection moves in place instead of re-rendering the sidebar, preserving scroll position and skipping entrance-animation replays.
 
 ### Fixed
 

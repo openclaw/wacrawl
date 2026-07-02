@@ -391,6 +391,11 @@ html[data-theme="auto"]:not(.prefers-dark) .chip.active {
   height: 72px;
   text-align: left;
   transition: background 0.12s ease;
+}
+
+/* Rows animate only on the very first paint; later re-renders (filters,
+   refresh) and chat switches must not replay the entrance. */
+.chat-list.animate-in .chat-row {
   animation: rowIn 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
   animation-delay: calc(var(--i, 0) * 16ms);
 }
@@ -846,6 +851,71 @@ html[data-theme="light"] .sc-7, html[data-theme="auto"]:not(.prefers-dark) .sc-7
 }
 
 .bubble.emoji-jumbo .bubble-body { font-size: 40px; line-height: 1.15; }
+
+/* Inline images (photos, stickers, GIFs) */
+
+.media-image {
+  display: block;
+  width: fit-content;
+  margin: 2px 0 4px;
+  padding: 0;
+  border-radius: 7px;
+  overflow: hidden;
+  /* Definite lengths only: a percentage here is ignored during intrinsic
+     sizing, letting the image's natural width inflate the bubble. */
+  max-width: min(330px, 72vw);
+  cursor: zoom-in;
+  background: none;
+}
+
+.media-image.loading {
+  min-width: 220px;
+  min-height: 150px;
+  background: linear-gradient(110deg, rgba(134, 150, 160, 0.12) 30%, rgba(134, 150, 160, 0.22) 50%, rgba(134, 150, 160, 0.12) 70%);
+  background-size: 220% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.media-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  width: auto;
+  height: auto;
+  border-radius: 7px;
+}
+
+.media-image.kind-sticker {
+  max-width: 170px;
+  background: none;
+}
+
+.media-image.kind-sticker.loading { min-width: 150px; min-height: 150px; }
+.media-image.kind-sticker img { max-height: 170px; }
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 4vh 4vw;
+  background: rgba(11, 20, 26, 0.88);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+  animation: fadeIn 0.15s ease both;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 10px;
+  box-shadow: var(--shadow-pane);
+}
+
+@keyframes shimmer {
+  to { background-position: -120% 0; }
+}
 
 /* Media attachment card */
 

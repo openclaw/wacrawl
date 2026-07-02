@@ -423,6 +423,19 @@ func (s *Store) Messages(ctx context.Context, filter MessageFilter) ([]Message, 
 	return scanMessages(ctx, s.db, query, args...)
 }
 
+// MessageBySourcePK returns the single message stored under the given source
+// primary key, or sql.ErrNoRows when it does not exist.
+func (s *Store) MessageBySourcePK(ctx context.Context, sourcePK int64) (Message, error) {
+	messages, err := scanMessages(ctx, s.db, "select "+messageSelectColumns+" from messages where source_pk = ?", sourcePK)
+	if err != nil {
+		return Message{}, err
+	}
+	if len(messages) == 0 {
+		return Message{}, sql.ErrNoRows
+	}
+	return messages[0], nil
+}
+
 func messageListQuery(filter MessageFilter) (string, []any) {
 	validQuery, validArgs := filteredMessagesQuery(filter, "")
 	validQuery += " and " + validUnixPredicate("ts")
