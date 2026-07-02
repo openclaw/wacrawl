@@ -52,6 +52,7 @@
   const state = {
     chats: [],
     filter: "all",
+    listRendered: false,
     messages: [],
     seenMessageIds: new Set(),
     selectedChat: null,
@@ -558,7 +559,20 @@
     });
   }
 
-  function renderChats() {
+  // Re-rendering the list is reserved for content changes (load, refresh,
+  // filters); selecting a chat only retargets the active row so the sidebar
+  // keeps its scroll position and does not replay animations.
+  function setActiveChat(jid) {
+    elements.chatList.querySelectorAll(".chat-row").forEach((row) => {
+      const active = Boolean(jid) && !state.searching && row.dataset.jid === jid;
+      row.classList.toggle("active", active);
+      row.setAttribute("aria-selected", String(active));
+    });
+  }
+
+  function renderChats(animate = false) {
+    const previousScroll = elements.chatList.scrollTop;
+    elements.chatList.classList.toggle("animate-in", animate);
     const chats = visibleChats();
     elements.chatList.replaceChildren();
     if (!chats.length) {
@@ -578,7 +592,8 @@
       row.setAttribute("role", "option");
       row.setAttribute("aria-selected", String(!state.searching && state.selectedChat?.jid === chat.jid));
       row.title = chatName(chat);
-      row.style.setProperty("--i", Math.min(i, 14));
+      row.dataset.jid = chat.jid;
+      if (animate) row.style.setProperty("--i", Math.min(i, 14));
       if (!state.searching && state.selectedChat?.jid === chat.jid) row.classList.add("active");
 
       row.append(avatarNode(chat.jid, chat.name, chat.kind, ""));
@@ -628,6 +643,7 @@
       row.addEventListener("click", () => selectChat(chat));
       elements.chatList.append(row);
     });
+    elements.chatList.scrollTop = previousScroll;
   }
 
   // ---------- Message rendering ----------
@@ -654,6 +670,131 @@
     video: "Video",
   };
 
+  // ---------- Inline images ----------
+  // Photos, stickers, and GIFs are fetched with the bearer token, turned into
+  // object URLs, and rendered inline. Blobs are cached per view so paging
+  // older messages does not refetch, and revoked when the view changes.
+
+  const mediaBlobCache = new Map();
+  let imageObserver = null;
+
+  function resetImageObserver() {
+    if (imageObserver) {
+      imageObserver.disconnect();
+      imageObserver = null;
+    }
+  }
+
+  function resetMediaCache() {
+    resetImageObserver();
+    for (const url of mediaBlobCache.values()) URL.revokeObjectURL(url);
+    mediaBlobCache.clear();
+  }
+
+  async function mediaObjectURL(sourcePK) {
+    let url = mediaBlobCache.get(sourcePK);
+    if (url) return url;
+    const response = await window.fetch(`/api/media?pk=${sourcePK}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error("no inline preview");
+    const blob = await response.blob();
+    url = URL.createObjectURL(blob);
+    mediaBlobCache.set(sourcePK, url);
+    return url;
+  }
+
+  function showLightbox(url, alt) {
+    const overlay = document.createElement("div");
+    overlay.className = "lightbox";
+    overlay.tabIndex = -1;
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = alt || "Attachment preview";
+    overlay.append(img);
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKey);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        close();
+      }
+    };
+    overlay.addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
+    document.body.append(overlay);
+    overlay.focus();
+  }
+
+  function watchImage(figure) {
+    if (!imageObserver) {
+      imageObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          imageObserver.unobserve(entry.target);
+          loadInlineImage(entry.target);
+        }
+      }, { root: elements.messageScroll, rootMargin: "500px" });
+    }
+    imageObserver.observe(figure);
+  }
+
+  async function loadInlineImage(figure) {
+    const sourcePK = Number(figure.dataset.pk);
+    const message = figure.wacrawlMessage;
+    try {
+      const url = await mediaObjectURL(sourcePK);
+      const img = document.createElement("img");
+      img.alt = mediaTitleOf(message) || MEDIA_PLACEHOLDER[mediaKind(message)] || "Attachment";
+      img.decoding = "async";
+      img.addEventListener("load", () => figure.classList.remove("loading"), { once: true });
+      img.src = url;
+      figure.append(img);
+      figure.addEventListener("click", () => showLightbox(url, img.alt));
+    } catch {
+      // No local file, non-image bytes, or too large — show the metadata card.
+      figure.replaceWith(mediaCard(message));
+    }
+  }
+
+  function inlineImageNode(message) {
+    const figure = document.createElement("button");
+    figure.type = "button";
+    figure.className = `media-image loading kind-${mediaKind(message)}`;
+    figure.title = "Click to enlarge";
+    figure.dataset.pk = message.source_pk;
+    figure.wacrawlMessage = message;
+    watchImage(figure);
+    return figure;
+  }
+
+  function canInlineImage(message) {
+    return message.source_pk > 0 && ["image", "gif", "sticker"].includes(mediaKind(message));
+  }
+
+  // WhatsApp stores the media content hash (44-char base64 of a 32-byte
+  // digest) as the title of nameless attachments, and mirrors it into the
+  // text column when there is no caption. Neither is human-readable.
+  const MEDIA_HASH_RE = /^[A-Za-z0-9+/]{43}=$/;
+
+  function hasMedia(message) {
+    return Boolean(message.media_type || message.media_title || (message.message_type && message.message_type !== "text"));
+  }
+
+  function mediaTitleOf(message) {
+    const title = message.media_title || "";
+    return MEDIA_HASH_RE.test(title) ? "" : title;
+  }
+
+  function captionOf(message) {
+    const text = message.text || "";
+    if (hasMedia(message) && text && (text === message.media_title || MEDIA_HASH_RE.test(text))) return "";
+    return text;
+  }
+
   function mediaCard(message) {
     const kind = mediaKind(message);
     const card = document.createElement("span");
@@ -665,9 +806,12 @@
     copy.className = "media-copy";
     const title = document.createElement("span");
     title.className = "media-title";
-    title.textContent = message.media_title || MEDIA_PLACEHOLDER[kind] || "Attachment";
+    const realTitle = mediaTitleOf(message);
+    title.textContent = realTitle || MEDIA_PLACEHOLDER[kind] || "Attachment";
     copy.append(title);
-    const noteText = [MEDIA_PLACEHOLDER[kind] || kind, formatSize(message.media_size)].filter(Boolean).join(" · ");
+    const noteParts = realTitle ? [MEDIA_PLACEHOLDER[kind] || kind] : [];
+    noteParts.push(formatSize(message.media_size));
+    const noteText = noteParts.filter(Boolean).join(" · ");
     if (noteText && noteText !== title.textContent) {
       const note = document.createElement("span");
       note.className = "media-note";
@@ -748,17 +892,18 @@
     }
 
     if (message.media_type || message.media_title || (message.message_type && message.message_type !== "text" && message.message_type !== "link")) {
-      bubble.append(mediaCard(message));
+      bubble.append(canInlineImage(message) ? inlineImageNode(message) : mediaCard(message));
     }
 
     const body = document.createElement("span");
     body.className = "bubble-body";
-    if (message.text) {
-      if (isJumboEmoji(message.text)) {
+    const caption = captionOf(message);
+    if (caption) {
+      if (isJumboEmoji(caption)) {
         bubble.classList.add("emoji-jumbo");
-        body.textContent = message.text;
+        body.textContent = caption;
       } else {
-        body.append(renderRichText(message.text));
+        body.append(renderRichText(caption));
       }
     }
     bubble.append(body);
@@ -770,6 +915,7 @@
   function renderMessages() {
     const chat = state.selectedChat;
     const isGroupChat = chat?.kind === "group";
+    resetImageObserver();
     elements.messageList.replaceChildren();
 
     if (chat && state.messages.length < (chat.message_count || 0)) {
@@ -885,15 +1031,21 @@
 
   async function selectChat(chat, keepSearchText) {
     const request = ++state.viewRequest;
+    const leavingMessageSearch = state.searching;
     state.searching = false;
     state.selectedChat = chat;
     state.messages = [];
     state.seenMessageIds = new Set();
+    const searchChangesSidebar = elements.searchInput.value !== "" && (!keepSearchText || leavingMessageSearch);
     if (!keepSearchText) {
       elements.searchInput.value = "";
       elements.searchClear.hidden = true;
     }
-    renderChats();
+    resetMediaCache();
+    // Rebuild only when text starts or stops filtering the chat list;
+    // otherwise just move the highlight.
+    if (searchChangesSidebar) renderChats();
+    else setActiveChat(chat.jid);
     showChatView();
     setChatHeader(chat);
     renderLoading("Decrypting local archive…");
@@ -990,7 +1142,7 @@
       if (message.snippet) {
         renderSnippet(snippet, message.snippet);
       } else {
-        snippet.textContent = message.text || message.media_title || "";
+        snippet.textContent = captionOf(message) || mediaTitleOf(message) || (hasMedia(message) ? MEDIA_PLACEHOLDER[mediaKind(message)] || "Attachment" : "");
       }
 
       card.append(head, sender, snippet);
@@ -1002,9 +1154,14 @@
 
   async function runSearch(query) {
     const request = ++state.viewRequest;
+    const wasSearching = state.searching;
     state.searching = true;
     state.selectedChat = null;
-    renderChats();
+    resetMediaCache();
+    // Entering search mode unfilters the chat list (the text now belongs to
+    // the message search); repeat searches leave the list untouched.
+    if (wasSearching) setActiveChat("");
+    else renderChats();
     showChatView();
     setSearchHeader(query, null);
     renderLoading("Searching the archive…");
@@ -1031,7 +1188,8 @@
       if (request !== state.viewRequest) return;
       renderStatus(status);
       state.chats = chats;
-      renderChats();
+      renderChats(!state.listRendered);
+      state.listRendered = true;
       if (state.searching) {
         const query = elements.searchInput.value.trim();
         if (query) await runSearch(query);
@@ -1095,9 +1253,12 @@
 
   elements.backButton.addEventListener("click", () => {
     state.viewRequest += 1;
+    const searchChangesSidebar = state.searching && elements.searchInput.value !== "";
     state.searching = false;
     state.selectedChat = null;
-    renderChats();
+    resetMediaCache();
+    if (searchChangesSidebar) renderChats();
+    else setActiveChat("");
     showIntro();
   });
 
@@ -1111,6 +1272,9 @@
       elements.searchInput.select();
     }
     if (event.key === "Escape") {
+      // The lightbox installs its own Escape handler after this global one.
+      // Leave navigation untouched so that handler can close only the overlay.
+      if (document.querySelector(".lightbox")) return;
       if (typing) {
         event.target.blur();
         return;

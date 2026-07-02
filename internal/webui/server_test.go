@@ -1,13 +1,18 @@
 package webui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -131,6 +136,87 @@ func TestHandlerMessagesBeforePagination(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("before_pk without before status=%d", response.Code)
 	}
+}
+
+func TestHandlerServesInlineMedia(t *testing.T) {
+	ctx := context.Background()
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+
+	dir := t.TempDir()
+	imagePath := filepath.Join(dir, "photo.png")
+	imageBytes := writeTestPNG(t, imagePath)
+	textPath := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(textPath, []byte("plain text, definitely not an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const jid = "555@s.whatsapp.net"
+	now := time.Date(2026, 7, 2, 9, 0, 0, 0, time.UTC)
+	err = archive.ReplaceAll(ctx, store.ImportStats{FinishedAt: now}, nil, []store.Chat{
+		{JID: jid, Kind: "dm", Name: "Media Tester", LastMessageAt: now},
+	}, nil, nil, []store.Message{
+		{SourcePK: 1, ChatJID: jid, MessageID: "p1", Timestamp: now, MediaType: "image", MediaPath: imagePath},
+		{SourcePK: 2, ChatJID: jid, MessageID: "p2", Timestamp: now, Text: "no media"},
+		{SourcePK: 3, ChatJID: jid, MessageID: "p3", Timestamp: now, MediaType: "image", MediaPath: textPath},
+		{SourcePK: 4, ChatJID: jid, MessageID: "p4", Timestamp: now, MediaType: "image", MediaPath: filepath.Join(dir, "missing.jpg")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(archive, testToken, testHost)
+
+	unauthorized := request(t, handler, "/api/media?pk=1", "")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized media status = %d", unauthorized.Code)
+	}
+
+	image := request(t, handler, "/api/media?pk=1", testToken)
+	if image.Code != http.StatusOK || image.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("media status=%d content-type=%q", image.Code, image.Header().Get("Content-Type"))
+	}
+	if !bytes.Equal(image.Body.Bytes(), imageBytes) {
+		t.Fatalf("media bytes mismatch: got %d want %d", image.Body.Len(), len(imageBytes))
+	}
+
+	for _, tc := range []struct {
+		query string
+		code  int
+	}{
+		{"pk=2", http.StatusNotFound},             // message without media
+		{"pk=3", http.StatusUnsupportedMediaType}, // bytes are not an image
+		{"pk=4", http.StatusNotFound},             // file missing on disk
+		{"pk=99", http.StatusNotFound},            // unknown message
+		{"pk=abc", http.StatusBadRequest},
+		{"pk=0", http.StatusBadRequest},
+		{"pk=", http.StatusBadRequest},
+	} {
+		response := request(t, handler, "/api/media?"+tc.query, testToken)
+		if response.Code != tc.code {
+			t.Fatalf("media %s status=%d want %d", tc.query, response.Code, tc.code)
+		}
+	}
+}
+
+func writeTestPNG(t *testing.T, path string) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for x := 0; x < 4; x++ {
+		for y := 0; y < 4; y++ {
+			img.Set(x, y, color.RGBA{R: uint8(60 * x), G: 168, B: 132, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestHandlerRejectsHostMethodsAndInvalidQueries(t *testing.T) {

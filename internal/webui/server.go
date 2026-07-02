@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +27,10 @@ var assets embed.FS
 const (
 	snippetStartMarker = "\ue000"
 	snippetEndMarker   = "\ue001"
+
+	// maxInlineMediaBytes caps how large an archived image may be before the
+	// viewer falls back to the metadata card instead of inlining bytes.
+	maxInlineMediaBytes = 25 << 20
 )
 
 type Config struct {
@@ -178,6 +184,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveMessages(w, r)
 	case "/api/search":
 		h.serveSearch(w, r)
+	case "/api/media":
+		h.serveMedia(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -326,6 +334,84 @@ func messagesForWeb(messages []store.Message) []messageResponse {
 	return out
 }
 
+// serveMedia streams archived image bytes for one message so the viewer can
+// render photos, stickers, and GIFs inline. It reads local files referenced by
+// our own importer, serves only content that sniffs as an image, and never
+// reveals the underlying path.
+func (h *handler) serveMedia(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimSpace(r.URL.Query().Get("pk"))
+	sourcePK, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || sourcePK <= 0 {
+		http.Error(w, "pk must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	message, err := h.store.MessageBySourcePK(r.Context(), sourcePK)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		writeArchiveError(w)
+		return
+	}
+	path := strings.TrimSpace(message.MediaPath)
+	if path == "" || !inlineImageMessage(message) {
+		http.Error(w, "no inline preview", http.StatusNotFound)
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	if info.Size() > maxInlineMediaBytes {
+		http.Error(w, "media too large for inline preview", http.StatusRequestEntityTooLarge)
+		return
+	}
+	// WhatsApp keeps stubs for media it has not downloaded; reading one blocks
+	// until macOS materializes it, which can wedge the request indefinitely.
+	if !fileMaterialized(info) {
+		http.Error(w, "media not downloaded locally", http.StatusNotFound)
+		return
+	}
+	file, err := openMediaFile(path)
+	if err != nil {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	sniff := make([]byte, 512)
+	n, err := io.ReadFull(file, sniff)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	sniff = sniff[:n]
+	contentType := http.DetectContentType(sniff)
+	if !strings.HasPrefix(contentType, "image/") {
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(sniff); err != nil {
+		return
+	}
+	_, _ = io.Copy(w, file)
+}
+
+func inlineImageMessage(message store.Message) bool {
+	hint := strings.ToLower(message.MediaType + " " + message.MessageType)
+	for _, kind := range []string{"image", "photo", "sticker", "gif"} {
+		if strings.Contains(hint, kind) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseBefore(w http.ResponseWriter, r *http.Request) (*time.Time, int64, bool) {
 	raw := strings.TrimSpace(r.URL.Query().Get("before"))
 	rawPK := strings.TrimSpace(r.URL.Query().Get("before_pk"))
@@ -376,7 +462,7 @@ func randomToken() (string, error) {
 
 func setSecurityHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

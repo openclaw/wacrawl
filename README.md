@@ -264,9 +264,10 @@ an alternate archive database.
 
 Browse archive status, recent chats, messages, and full-text search in a local
 web viewer styled after WhatsApp itself — two-pane layout, chat bubbles with
-day separators, deterministic contact avatars, dark/light themes, and rendered
-WhatsApp formatting (`*bold*`, `_italic_`, `~strike~`, `` `code` ``, fenced
-blocks, quotes, lists, links):
+day separators, deterministic contact avatars, dark/light themes, inline
+photo/sticker/GIF previews with a lightbox, and rendered WhatsApp formatting
+(`*bold*`, `_italic_`, `~strike~`, `` `code` ``, fenced blocks, quotes, lists,
+links):
 
 ```bash
 wacrawl web
@@ -284,10 +285,13 @@ removes it from the address bar. Use a fixed loopback port when useful:
 wacrawl --sync never web --port 8787
 ```
 
-The viewer is deliberately read-only. It does not serve media bytes or paths,
-change archive or backup configuration, schedule syncs, or expose a non-local
-listen address. The normal global sync policy runs once before the viewer
-starts; use the CLI to sync again, then use the refresh button in the browser.
+The viewer is deliberately read-only. Photos, stickers, and GIFs render inline
+straight from your local files behind the same per-run key (content-sniffed,
+images only, size-capped); media paths are never exposed, other attachment
+types stay metadata-only, and the viewer cannot change archive or backup
+configuration, schedule syncs, or expose a non-local listen address. The
+normal global sync policy runs once before the viewer starts; use the CLI to
+sync again, then use the refresh button in the browser.
 
 ## Sync Behavior
 
