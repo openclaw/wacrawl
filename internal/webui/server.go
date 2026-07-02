@@ -22,6 +22,11 @@ import (
 //go:embed static/*
 var assets embed.FS
 
+const (
+	snippetStartMarker = "\ue000"
+	snippetEndMarker   = "\ue001"
+)
+
 type Config struct {
 	Port   int
 	Output io.Writer
@@ -57,6 +62,7 @@ type chatResponse struct {
 }
 
 type messageResponse struct {
+	SourcePK    int64     `json:"source_pk"`
 	ChatJID     string    `json:"chat_jid"`
 	ChatName    string    `json:"chat_name,omitempty"`
 	MessageID   string    `json:"message_id"`
@@ -248,9 +254,15 @@ func (h *handler) serveMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	before, beforePK, ok := parseBefore(w, r)
+	if !ok {
+		return
+	}
 	messages, err := h.store.Messages(r.Context(), store.MessageFilter{
-		ChatJID: strings.TrimSpace(r.URL.Query().Get("chat")),
-		Limit:   limit,
+		ChatJID:  strings.TrimSpace(r.URL.Query().Get("chat")),
+		Limit:    limit,
+		Before:   before,
+		BeforePK: beforePK,
 	})
 	if err != nil {
 		writeArchiveError(w)
@@ -272,7 +284,14 @@ func (h *handler) serveSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	messages, err := h.store.Search(r.Context(), store.MessageFilter{Query: query, Limit: limit})
+	messages, err := h.store.Search(r.Context(), store.MessageFilter{
+		Query: query,
+		Limit: limit,
+		// Private-use markers cannot collide with real message text, so the
+		// client can turn them into highlight nodes without guessing.
+		SnippetStart: snippetStartMarker,
+		SnippetEnd:   snippetEndMarker,
+	})
 	if err != nil {
 		http.Error(w, "invalid search query", http.StatusBadRequest)
 		return
@@ -284,6 +303,7 @@ func messagesForWeb(messages []store.Message) []messageResponse {
 	out := make([]messageResponse, 0, len(messages))
 	for _, message := range messages {
 		out = append(out, messageResponse{
+			SourcePK:    message.SourcePK,
 			ChatJID:     message.ChatJID,
 			ChatName:    message.ChatName,
 			MessageID:   message.MessageID,
@@ -301,6 +321,33 @@ func messagesForWeb(messages []store.Message) []messageResponse {
 		})
 	}
 	return out
+}
+
+func parseBefore(w http.ResponseWriter, r *http.Request) (*time.Time, int64, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("before"))
+	rawPK := strings.TrimSpace(r.URL.Query().Get("before_pk"))
+	if raw == "" {
+		if rawPK != "" {
+			http.Error(w, "before_pk requires before", http.StatusBadRequest)
+			return nil, 0, false
+		}
+		return nil, 0, true
+	}
+	seconds, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seconds <= 0 {
+		http.Error(w, "before must be a positive unix timestamp", http.StatusBadRequest)
+		return nil, 0, false
+	}
+	var beforePK int64
+	if rawPK != "" {
+		beforePK, err = strconv.ParseInt(rawPK, 10, 64)
+		if err != nil || beforePK <= 0 {
+			http.Error(w, "before_pk must be a positive integer", http.StatusBadRequest)
+			return nil, 0, false
+		}
+	}
+	before := time.Unix(seconds, 0).UTC()
+	return &before, beforePK, true
 }
 
 func parseLimit(w http.ResponseWriter, r *http.Request, fallback int) (int, bool) {

@@ -130,15 +130,24 @@ type Message struct {
 }
 
 type MessageFilter struct {
-	Query    string
-	ChatJID  string
-	Sender   string
-	Limit    int
-	After    *time.Time
-	Before   *time.Time
+	Query   string
+	ChatJID string
+	Sender  string
+	Limit   int
+	After   *time.Time
+	Before  *time.Time
+	// BeforePK tightens Before into a composite cursor: rows must have
+	// ts < Before, or ts == Before with source_pk < BeforePK. Without it,
+	// paging by timestamp alone can stall when a page boundary lands inside
+	// a run of messages that share the same second.
+	BeforePK int64
 	FromMe   *bool
 	HasMedia bool
 	Asc      bool
+	// SnippetStart and SnippetEnd wrap search matches inside snippets.
+	// Both default to the CLI-friendly "[" and "]" markers.
+	SnippetStart string
+	SnippetEnd   string
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -467,8 +476,16 @@ func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, er
 	if err != nil {
 		return nil, err
 	}
-	query := `select m.source_pk, m.chat_jid, m.chat_name, m.msg_id, m.sender_jid, m.sender_name, m.ts, m.from_me, m.text, m.raw_type, m.message_type, m.media_type, m.media_title, m.media_path, m.media_url, m.media_size, m.starred, snippet(messages_fts, 0, '[', ']', '...', 12) from messages_fts f join messages m on m.rowid=f.rowid where messages_fts match ?`
-	args := []any{ftsQuery}
+	snippetStart := filter.SnippetStart
+	if snippetStart == "" {
+		snippetStart = "["
+	}
+	snippetEnd := filter.SnippetEnd
+	if snippetEnd == "" {
+		snippetEnd = "]"
+	}
+	query := `select m.source_pk, m.chat_jid, m.chat_name, m.msg_id, m.sender_jid, m.sender_name, m.ts, m.from_me, m.text, m.raw_type, m.message_type, m.media_type, m.media_title, m.media_path, m.media_url, m.media_size, m.starred, snippet(messages_fts, 0, ?, ?, '...', 12) from messages_fts f join messages m on m.rowid=f.rowid where messages_fts match ?`
+	args := []any{snippetStart, snippetEnd, ftsQuery}
 	query, args = applyMessageFilters(query, args, filter, true)
 	query += " order by bm25(messages_fts) limit ?"
 	args = append(args, filter.Limit)
@@ -493,8 +510,13 @@ func applyMessageFilters(query string, args []any, filter MessageFilter, joined 
 		args = append(args, unix(*filter.After))
 	}
 	if filter.Before != nil {
-		query += " and " + prefix + "ts <= ?"
-		args = append(args, unix(*filter.Before))
+		if filter.BeforePK > 0 {
+			query += " and (" + prefix + "ts < ? or (" + prefix + "ts = ? and " + prefix + "source_pk < ?))"
+			args = append(args, unix(*filter.Before), unix(*filter.Before), filter.BeforePK)
+		} else {
+			query += " and " + prefix + "ts <= ?"
+			args = append(args, unix(*filter.Before))
+		}
 	}
 	if filter.FromMe != nil {
 		query += " and " + prefix + "from_me = ?"

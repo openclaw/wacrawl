@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestHandlerServesAuthenticatedArchiveViews(t *testing.T) {
 	handler := testHandler(t)
 
 	root := request(t, handler, "/", "")
-	if root.Code != http.StatusOK || !strings.Contains(root.Body.String(), "Your message") {
+	if root.Code != http.StatusOK || !strings.Contains(root.Body.String(), "wacrawl archive") {
 		t.Fatalf("root status=%d body=%q", root.Code, root.Body.String())
 	}
 	if got := root.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'none'") || !strings.Contains(got, "frame-ancestors 'none'") {
@@ -41,7 +42,7 @@ func TestHandlerServesAuthenticatedArchiveViews(t *testing.T) {
 	}
 
 	status := request(t, handler, "/api/status", testToken)
-	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"messages":2`) || strings.Contains(status.Body.String(), "db_path") {
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"messages":3`) || strings.Contains(status.Body.String(), "db_path") {
 		t.Fatalf("status code=%d body=%s", status.Code, status.Body.String())
 	}
 
@@ -65,6 +66,61 @@ func TestHandlerServesAuthenticatedArchiveViews(t *testing.T) {
 	var results []map[string]any
 	if err := json.Unmarshal(search.Body.Bytes(), &results); err != nil || len(results) == 0 {
 		t.Fatalf("search json results=%#v err=%v", results, err)
+	}
+	snippet, _ := results[0]["snippet"].(string)
+	if !strings.Contains(snippet, snippetStartMarker+"launch"+snippetEndMarker) {
+		t.Fatalf("search snippet markers missing: %q", snippet)
+	}
+}
+
+func TestHandlerMessagesBeforePagination(t *testing.T) {
+	handler := testHandler(t)
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+
+	cutoff := strconv.FormatInt(base.Add(-30*time.Second).Unix(), 10)
+	page := request(t, handler, "/api/messages?chat=123%40g.us&limit=10&before="+cutoff, testToken)
+	if page.Code != http.StatusOK {
+		t.Fatalf("before page status=%d body=%s", page.Code, page.Body.String())
+	}
+	var messages []map[string]any
+	if err := json.Unmarshal(page.Body.Bytes(), &messages); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0]["message_id"] != "m1" || messages[1]["message_id"] != "m3" {
+		t.Fatalf("before page messages=%#v", messages)
+	}
+	if messages[0]["source_pk"] != float64(1) {
+		t.Fatalf("before page source_pk=%#v", messages[0]["source_pk"])
+	}
+
+	// A composite cursor advances within the shared second: m1 and m3 have the
+	// same timestamp, so paging from m3 must return only m1.
+	sameSecond := strconv.FormatInt(base.Add(-time.Minute).Unix(), 10)
+	page = request(t, handler, "/api/messages?chat=123%40g.us&limit=10&before="+sameSecond+"&before_pk=3", testToken)
+	if page.Code != http.StatusOK {
+		t.Fatalf("before_pk page status=%d body=%s", page.Code, page.Body.String())
+	}
+	messages = nil
+	if err := json.Unmarshal(page.Body.Bytes(), &messages); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0]["message_id"] != "m1" {
+		t.Fatalf("before_pk page messages=%#v", messages)
+	}
+
+	for _, invalid := range []string{"abc", "-5", "0"} {
+		response := request(t, handler, "/api/messages?chat=123%40g.us&before="+invalid, testToken)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("before=%q status=%d", invalid, response.Code)
+		}
+	}
+	response := request(t, handler, "/api/messages?chat=123%40g.us&before="+cutoff+"&before_pk=0", testToken)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("before_pk=0 status=%d", response.Code)
+	}
+	response = request(t, handler, "/api/messages?chat=123%40g.us&before_pk=3", testToken)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("before_pk without before status=%d", response.Code)
 	}
 }
 
@@ -244,6 +300,7 @@ func testArchive(t *testing.T) *store.Store {
 	}, nil, nil, []store.Message{
 		{SourcePK: 1, ChatJID: "123@g.us", ChatName: "Launch Group", MessageID: "m1", SenderName: "Alice", Timestamp: now.Add(-time.Minute), Text: "launch now", MediaType: "image", MediaPath: "/private/media/private.jpg", MediaURL: "https://example.invalid/private.jpg"},
 		{SourcePK: 2, ChatJID: "123@g.us", ChatName: "Launch Group", MessageID: "m2", Timestamp: now, FromMe: true, Text: "ship later"},
+		{SourcePK: 3, ChatJID: "123@g.us", ChatName: "Launch Group", MessageID: "m3", SenderName: "Alice", Timestamp: now.Add(-time.Minute), Text: "launch encore"},
 	})
 	if err != nil {
 		t.Fatal(err)
