@@ -1,88 +1,111 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="auto">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
-    <title>wacrawl — local archive</title>
+    <meta name="color-scheme" content="dark light">
+    <title>wacrawl — WhatsApp archive</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/app.css">
   </head>
   <body>
-    <div class="atmosphere" aria-hidden="true"></div>
-
     <section class="locked" id="locked" hidden>
-      <p class="eyebrow">LOCAL ARCHIVE / ACCESS REQUIRED</p>
-      <h1>This window has no archive key.</h1>
-      <p>Open the private URL printed by <code>wacrawl web</code>. Restart the command if the URL is no longer available.</p>
+      <div class="locked-card">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm-3 8V7a3 3 0 1 1 6 0v3H9Zm3 4a1.5 1.5 0 0 1 .75 2.8V19a.75.75 0 0 1-1.5 0v-2.2A1.5 1.5 0 0 1 12 14Z"/></svg>
+        <h1>This window has no archive key</h1>
+        <p>Open the private URL printed by <code>wacrawl web</code>. Restart the command if the URL is gone.</p>
+      </div>
     </section>
 
-    <main class="shell" id="app" hidden>
-      <header class="masthead">
-        <a class="wordmark" href="#" aria-label="wacrawl home">
-          <span class="wordmark-mark" aria-hidden="true">W/</span>
-          <span>WACRAWL</span>
-        </a>
-        <form class="search" id="search-form" role="search">
-          <label class="sr-only" for="search-input">Search messages</label>
-          <span class="search-glyph" aria-hidden="true">⌕</span>
-          <input id="search-input" name="q" type="search" autocomplete="off" placeholder="Search the archive">
-          <kbd>↵</kbd>
-        </form>
-        <button class="quiet-button" id="refresh-button" type="button">
-          <span class="refresh-mark" aria-hidden="true">↻</span>
-          Refresh view
-        </button>
-      </header>
-
-      <section class="ledger" aria-label="Archive status">
-        <div class="ledger-heading">
-          <p class="eyebrow">PRIVATE / READ-ONLY / LOOPBACK</p>
-          <h1>Your message<br>field notes.</h1>
-          <p class="ledger-range" id="archive-range">Reading archive…</p>
-        </div>
-        <dl class="metrics" id="metrics">
-          <div><dt>Messages</dt><dd>—</dd></div>
-          <div><dt>Chats</dt><dd>—</dd></div>
-          <div><dt>Contacts</dt><dd>—</dd></div>
-          <div><dt>Media refs</dt><dd>—</dd></div>
-        </dl>
-      </section>
-
-      <section class="workbench">
-        <aside class="chat-rail" aria-label="Chats">
-          <div class="rail-heading">
-            <div>
-              <p class="eyebrow">INDEX 01</p>
-              <h2>Recent chats</h2>
-            </div>
-            <span class="count-badge" id="chat-count">0</span>
+    <div class="app" id="app" hidden>
+      <aside class="sidebar" id="sidebar">
+        <header class="sidebar-top">
+          <a class="brand" href="#" aria-label="wacrawl archive">
+            <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+              <path class="brand-bubble" d="M16 3C8.82 3 3 8.6 3 15.5c0 2.9 1.03 5.57 2.76 7.7L4.5 28.5l5.6-1.94A13.6 13.6 0 0 0 16 28c7.18 0 13-5.6 13-12.5S23.18 3 16 3Z"/>
+              <path class="brand-glyph" d="M9.5 12.25 12 20h2.2l1.8-5.1L17.8 20H20l2.5-7.75h-2.1l-1.5 5.2-1.8-5.2h-2.2l-1.8 5.2-1.5-5.2H9.5Z"/>
+            </svg>
+            <span class="brand-name">wacrawl</span>
+            <span class="brand-badge">read‑only</span>
+          </a>
+          <div class="sidebar-actions">
+            <button class="icon-button" id="stats-toggle" type="button" title="Archive overview" aria-label="Archive overview" aria-expanded="false"></button>
+            <button class="icon-button" id="theme-toggle" type="button" title="Switch theme" aria-label="Switch theme"></button>
+            <button class="icon-button" id="refresh-button" type="button" title="Refresh archive view" aria-label="Refresh archive view"></button>
           </div>
-          <div class="chat-list" id="chat-list"></div>
-        </aside>
+        </header>
 
-        <section class="message-panel" aria-live="polite" aria-busy="true">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow" id="panel-kicker">ARCHIVE THREAD</p>
-              <h2 id="panel-title">Select a chat</h2>
-              <p class="panel-subtitle" id="panel-subtitle">Messages remain on this machine.</p>
-            </div>
-            <button class="text-button" id="clear-search" type="button" hidden>Back to chats</button>
-          </div>
-          <div class="message-list" id="message-list">
-            <div class="empty-state">
-              <span aria-hidden="true">◎</span>
-              <p>Choose a thread from the index.</p>
-            </div>
-          </div>
+        <section class="stats-panel" id="stats-panel" hidden aria-label="Archive overview">
+          <dl class="stats-grid" id="stats-grid">
+            <div><dt>Messages</dt><dd>—</dd></div>
+            <div><dt>Chats</dt><dd>—</dd></div>
+            <div><dt>Contacts</dt><dd>—</dd></div>
+            <div><dt>Groups</dt><dd>—</dd></div>
+            <div><dt>Media</dt><dd>—</dd></div>
+            <div><dt>Unread</dt><dd>—</dd></div>
+          </dl>
+          <p class="stats-range" id="stats-range">Reading archive…</p>
         </section>
-      </section>
 
-      <footer>
-        <span id="sync-note">Archive snapshot</span>
-        <span>Served by wacrawl · no cloud · no writes</span>
-      </footer>
-    </main>
+        <form class="search-bar" id="search-form" role="search">
+          <div class="search-field">
+            <span class="search-icon" aria-hidden="true"></span>
+            <label class="sr-only" for="search-input">Filter chats or search messages</label>
+            <input id="search-input" name="q" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="Filter chats — press Enter to search messages">
+            <button class="search-clear" id="search-clear" type="button" hidden aria-label="Clear search">×</button>
+          </div>
+        </form>
+
+        <nav class="filter-chips" id="filter-chips" aria-label="Chat filters">
+          <button type="button" class="chip active" data-filter="all">All</button>
+          <button type="button" class="chip" data-filter="unread">Unread</button>
+          <button type="button" class="chip" data-filter="groups">Groups</button>
+        </nav>
+
+        <div class="chat-list" id="chat-list" role="listbox" aria-label="Chats"></div>
+
+        <footer class="sidebar-foot">
+          <span class="foot-icon" aria-hidden="true"></span>
+          <span id="sync-note">Archive snapshot</span>
+        </footer>
+      </aside>
+
+      <main class="chat-pane" id="chat-pane">
+        <section class="chat-intro" id="chat-intro">
+          <div class="intro-art" aria-hidden="true">
+            <svg viewBox="0 0 160 160">
+              <circle class="intro-ring" cx="80" cy="80" r="76"/>
+              <path class="intro-bubble" d="M80 30c-26.5 0-48 19.9-48 44.5 0 10.4 3.8 20 10.2 27.6L37.5 118l17.4-6a51.6 51.6 0 0 0 25.1 6.5c26.5 0 48-19.9 48-44.5S106.5 30 80 30Z"/>
+              <path class="intro-tick" d="M60 76.5l9.5 9.5L84 71.5m-4.5 14.5L94 71.5"/>
+            </svg>
+          </div>
+          <h1>wacrawl archive</h1>
+          <p class="intro-copy">Your WhatsApp history, browsable and searchable — entirely on this machine.</p>
+          <p class="intro-stats" id="intro-stats"></p>
+          <p class="intro-lock"><span class="foot-icon" aria-hidden="true"></span>Loopback only · per‑run key · nothing is written or sent</p>
+        </section>
+
+        <section class="chat-view" id="chat-view" hidden aria-live="polite" aria-busy="false">
+          <header class="chat-header">
+            <button class="icon-button back-button" id="back-button" type="button" title="Back to chats" aria-label="Back to chats"></button>
+            <span class="chat-header-avatar" id="chat-avatar"></span>
+            <div class="chat-header-copy">
+              <h2 id="chat-title">Chat</h2>
+              <p id="chat-subtitle"></p>
+            </div>
+            <span class="chat-header-flag" id="chat-flag" hidden></span>
+          </header>
+          <div class="message-scroll" id="message-scroll" tabindex="0">
+            <div class="message-list" id="message-list"></div>
+          </div>
+          <footer class="chat-foot">
+            <span class="foot-icon" aria-hidden="true"></span>
+            <span>Archived conversation — read‑only snapshot served from your local database.</span>
+          </footer>
+        </section>
+      </main>
+    </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <script src="/app.js" defer></script>

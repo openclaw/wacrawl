@@ -263,11 +263,16 @@ an alternate archive database.
 ### `web`
 
 Browse archive status, recent chats, messages, and full-text search in a local
-web viewer:
+web viewer styled after WhatsApp itself — two-pane layout, chat bubbles with
+day separators, deterministic contact avatars, dark/light themes, and rendered
+WhatsApp formatting (`*bold*`, `_italic_`, `~strike~`, `` `code` ``, fenced
+blocks, quotes, lists, links):
 
 ```bash
 wacrawl web
 ```
+
+![wacrawl web viewer](docs/assets/webui-chat-dark.png)
 
 The command prints a private URL and keeps running until you press Ctrl-C. It
 binds only to `127.0.0.1`, chooses a free random port by default, and protects
@@ -282,7 +287,7 @@ wacrawl --sync never web --port 8787
 The viewer is deliberately read-only. It does not serve media bytes or paths,
 change archive or backup configuration, schedule syncs, or expose a non-local
 listen address. The normal global sync policy runs once before the viewer
-starts; use the CLI to sync again, then select **Refresh view** in the browser.
+starts; use the CLI to sync again, then use the refresh button in the browser.
 
 ## Sync Behavior
 
