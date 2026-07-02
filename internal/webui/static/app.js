@@ -748,7 +748,7 @@
     try {
       const url = await mediaObjectURL(sourcePK);
       const img = document.createElement("img");
-      img.alt = message.media_title || MEDIA_PLACEHOLDER[mediaKind(message)] || "Attachment";
+      img.alt = mediaTitleOf(message) || MEDIA_PLACEHOLDER[mediaKind(message)] || "Attachment";
       img.decoding = "async";
       img.addEventListener("load", () => figure.classList.remove("loading"), { once: true });
       img.src = url;
@@ -775,6 +775,26 @@
     return message.source_pk > 0 && ["image", "gif", "sticker"].includes(mediaKind(message));
   }
 
+  // WhatsApp stores the media content hash (44-char base64 of a 32-byte
+  // digest) as the title of nameless attachments, and mirrors it into the
+  // text column when there is no caption. Neither is human-readable.
+  const MEDIA_HASH_RE = /^[A-Za-z0-9+/]{43}=$/;
+
+  function hasMedia(message) {
+    return Boolean(message.media_type || message.media_title || (message.message_type && message.message_type !== "text"));
+  }
+
+  function mediaTitleOf(message) {
+    const title = message.media_title || "";
+    return MEDIA_HASH_RE.test(title) ? "" : title;
+  }
+
+  function captionOf(message) {
+    const text = message.text || "";
+    if (hasMedia(message) && text && (text === message.media_title || MEDIA_HASH_RE.test(text))) return "";
+    return text;
+  }
+
   function mediaCard(message) {
     const kind = mediaKind(message);
     const card = document.createElement("span");
@@ -786,9 +806,12 @@
     copy.className = "media-copy";
     const title = document.createElement("span");
     title.className = "media-title";
-    title.textContent = message.media_title || MEDIA_PLACEHOLDER[kind] || "Attachment";
+    const realTitle = mediaTitleOf(message);
+    title.textContent = realTitle || MEDIA_PLACEHOLDER[kind] || "Attachment";
     copy.append(title);
-    const noteText = [MEDIA_PLACEHOLDER[kind] || kind, formatSize(message.media_size)].filter(Boolean).join(" · ");
+    const noteParts = realTitle ? [MEDIA_PLACEHOLDER[kind] || kind] : [];
+    noteParts.push(formatSize(message.media_size));
+    const noteText = noteParts.filter(Boolean).join(" · ");
     if (noteText && noteText !== title.textContent) {
       const note = document.createElement("span");
       note.className = "media-note";
@@ -874,12 +897,13 @@
 
     const body = document.createElement("span");
     body.className = "bubble-body";
-    if (message.text) {
-      if (isJumboEmoji(message.text)) {
+    const caption = captionOf(message);
+    if (caption) {
+      if (isJumboEmoji(caption)) {
         bubble.classList.add("emoji-jumbo");
-        body.textContent = message.text;
+        body.textContent = caption;
       } else {
-        body.append(renderRichText(message.text));
+        body.append(renderRichText(caption));
       }
     }
     bubble.append(body);
@@ -1117,7 +1141,7 @@
       if (message.snippet) {
         renderSnippet(snippet, message.snippet);
       } else {
-        snippet.textContent = message.text || message.media_title || "";
+        snippet.textContent = captionOf(message) || mediaTitleOf(message) || (hasMedia(message) ? MEDIA_PLACEHOLDER[mediaKind(message)] || "Attachment" : "");
       }
 
       card.append(head, sender, snippet);
