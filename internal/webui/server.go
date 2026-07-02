@@ -368,7 +368,13 @@ func (h *handler) serveMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "media too large for inline preview", http.StatusRequestEntityTooLarge)
 		return
 	}
-	file, err := os.Open(path) // #nosec G304 -- media_path was written by our own importer, not request input.
+	// WhatsApp keeps stubs for media it has not downloaded; reading one blocks
+	// until macOS materializes it, which can wedge the request indefinitely.
+	if !fileMaterialized(info) {
+		http.Error(w, "media not downloaded locally", http.StatusNotFound)
+		return
+	}
+	file, err := openMediaFile(path)
 	if err != nil {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
