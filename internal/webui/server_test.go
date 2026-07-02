@@ -29,11 +29,20 @@ func TestHandlerServesAuthenticatedArchiveViews(t *testing.T) {
 	if root.Code != http.StatusOK || !strings.Contains(root.Body.String(), "wacrawl archive") {
 		t.Fatalf("root status=%d body=%q", root.Code, root.Body.String())
 	}
+	if !strings.Contains(root.Body.String(), `rel="icon" href="/favicon.svg"`) {
+		t.Fatalf("root missing favicon link: %q", root.Body.String())
+	}
 	if got := root.Header().Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'none'") || !strings.Contains(got, "frame-ancestors 'none'") {
 		t.Fatalf("content security policy = %q", got)
 	}
 	if got := root.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("cache control = %q", got)
+	}
+	for _, path := range []string{"/favicon.svg", "/favicon.ico"} {
+		favicon := request(t, handler, path, "")
+		if favicon.Code != http.StatusOK || favicon.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(favicon.Body.String(), "<svg") {
+			t.Fatalf("%s status=%d content-type=%q body=%q", path, favicon.Code, favicon.Header().Get("Content-Type"), favicon.Body.String())
+		}
 	}
 
 	unauthorized := request(t, handler, "/api/status", "")

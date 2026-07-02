@@ -154,6 +154,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/app.js":
 		h.serveAsset(w, "static/app.js", "text/javascript; charset=utf-8")
 		return
+	case "/favicon.svg", "/favicon.ico":
+		h.serveAsset(w, "static/favicon.svg", "image/svg+xml")
+		return
 	}
 
 	if !strings.HasPrefix(r.URL.Path, "/api/") {
