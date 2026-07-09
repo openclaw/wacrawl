@@ -33,6 +33,7 @@ go.work.sum
 
 # env file
 .env
+.mac-release.env
 
 # Editor/IDE
 .claude/

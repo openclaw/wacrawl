@@ -1,102 +1,84 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to (re)release (e.g. v0.1.0)"
+        description: "Release tag to verify (e.g. v0.3.2)"
         required: true
         type: string
+      draft:
+        description: "Verify an unpublished draft release"
+        required: true
+        default: true
+        type: boolean
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
+  verify-macos-assets:
+    permissions:
+      # GitHub hides draft releases from read-only workflow tokens. The token is
+      # exposed only to the asset download step below.
+      contents: write
+    if: >-
+      github.event_name == 'release' ||
+      (endsWith(github.workflow_ref, format('@refs/heads/{0}', github.event.repository.default_branch)) &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runs-on: macos-15
+            arch: arm64
+          - runs-on: macos-15-intel
+            arch: amd64
+    runs-on: ${{ matrix.runs-on }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
     steps:
-      - name: Checkout
+      - name: Checkout trusted verifier
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Resolve release tag
+      - name: Download macOS assets
+        shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_TAG: ${{ inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            release_tag="$INPUT_TAG"
-          else
-            release_tag="$REF_NAME"
+          set -euo pipefail
+          expected_draft=false
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            expected_draft="${{ inputs.draft }}"
           fi
-          case "$release_tag" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *)
-              echo "::error::Release tag must look like vMAJOR.MINOR.PATCH"
-              exit 1
-              ;;
-          esac
-          if ! git rev-parse -q --verify "refs/tags/${release_tag}^{commit}" >/dev/null; then
-            echo "::error::Release tag does not exist: ${release_tag}"
-            exit 1
-          fi
-          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          trusted/scripts/download-release-assets.sh \
+            "$RELEASE_TAG" "${{ matrix.arch }}" "$expected_draft" artifacts
 
-      - name: Stash GoReleaser config
-        run: cp .goreleaser.yaml /tmp/.goreleaser.yaml
-
-      - name: Checkout release tag
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: git checkout --detach "refs/tags/$RELEASE_TAG"
-
-      - name: GoReleaser
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean --config /tmp/.goreleaser.yaml
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify Developer ID signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=${RELEASE_TAG#v}
+          trusted/scripts/verify-macos-release.sh "$RELEASE_TAG" \
+            "artifacts/wacrawl_${version}_darwin_${{ matrix.arch }}.tar.gz"
 
   update-homebrew-tap:
+    if: ${{ github.event_name == 'release' }}
     runs-on: ubuntu-latest
-    needs: goreleaser
+    needs: verify-macos-assets
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
-      - name: Resolve release tag
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          INPUT_TAG: ${{ inputs.tag }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            release_tag="$INPUT_TAG"
-          else
-            release_tag="$REF_NAME"
-          fi
-          case "$release_tag" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *)
-              echo "::error::Release tag must look like vMAJOR.MINOR.PATCH"
-              exit 1
-              ;;
-          esac
-          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
-
       - name: Dispatch tap formula update
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
+          set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::Set HOMEBREW_TAP_TOKEN with workflow access to openclaw/homebrew-tap"
             exit 1

@@ -2,6 +2,15 @@
 
 ## [0.3.2] - Unreleased
 
+### Changed
+
+- Build official macOS release binaries locally through the managed OpenClaw Foundation signing identity and verify both Darwin assets before updating Homebrew, while keeping CI and cross-platform snapshot builds credential-free.
+- Update CrawlKit to v0.13.4.
+
+### Security
+
+- Update Go to 1.26.5 to fix the reachable GO-2026-5856 `crypto/tls` vulnerability.
+
 ## [0.3.1] - 2026-07-02
 
 ### Added

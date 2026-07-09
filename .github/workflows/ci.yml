@@ -140,6 +140,9 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
 
+      - name: Test macOS release scripts
+        run: bash scripts/test-macos-release.sh
+
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 15

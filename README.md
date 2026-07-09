@@ -728,14 +728,34 @@ Coverage must stay at or above 85%.
 
 ## Release
 
-Releases are tag-driven through GoReleaser.
+Release artifacts are built locally from the exact signed tag on an authorized
+maintainer Mac. CI validates snapshots and published assets; it never receives
+the Developer ID private key or publishes unsigned Darwin binaries.
 
 ```bash
-git tag -a v0.2.0 -m "Release 0.2.0"
-git push origin main --tags
+git tag -s v0.3.2 -m "Release 0.3.2"
+git push origin main
+git push origin v0.3.2
+make release-artifacts VERSION=v0.3.2
 ```
 
-CI publishes GitHub release artifacts for:
+`make release-artifacts` wraps GoReleaser with the shared `release-mac-app codesign-run`
+helper. The helper loads the managed OpenClaw identity from the
+authorized Mac's runtime configuration; keychain locations and credentials do
+not belong in the repository. Both Darwin binaries are signed with the stable
+identifier `org.openclaw.wacrawl` and exact identity `Developer ID Application:
+OpenClaw Foundation (FWJYW4S8P8)`.
+
+Create a draft GitHub release and attach the archives plus `checksums.txt` from
+`dist/`. Run the `release` workflow from protected `main` with the tag and
+`draft=true` to verify the unpublished draft, then publish it. Publication
+reruns signature verification before dispatching the Homebrew update.
+
+Local builds and GoReleaser snapshots do not require signing credentials. They
+remain suitable for development and cross-platform CI, but are not official
+macOS release artifacts.
+
+The official draft release contains artifacts for:
 
 ```text
 darwin/amd64
