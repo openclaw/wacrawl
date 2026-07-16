@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -155,6 +156,21 @@ func TestOpenRequiresPath(t *testing.T) {
 	}
 	if !fromUnix(0).IsZero() {
 		t.Fatal("zero unix should be zero time")
+	}
+}
+
+func TestOpenInMemoryDoesNotCreateFile(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	st, err := Open(context.Background(), ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ":memory:")); !os.IsNotExist(err) {
+		t.Fatalf("in-memory archive created a disk file: %v", err)
 	}
 }
 

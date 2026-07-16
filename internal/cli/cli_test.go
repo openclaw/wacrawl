@@ -60,6 +60,71 @@ func TestRunEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRunRelativeAndAbsolutePathContracts(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	createDesktopFixture(t, source)
+	t.Chdir(root)
+
+	for _, tc := range []struct {
+		name   string
+		source string
+		dbPath string
+		dbFile string
+	}{
+		{name: "relative", source: "./source", dbPath: "./relative.db", dbFile: filepath.Join(root, "relative.db")},
+		{name: "absolute", source: source, dbPath: filepath.Join(root, "absolute.db"), dbFile: filepath.Join(root, "absolute.db")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runJSON := func(args []string, target any) {
+				t.Helper()
+				var stdout, stderr bytes.Buffer
+				if err := Run(ctx, args, &stdout, &stderr); err != nil {
+					t.Fatalf("Run(%q) error = %v stderr=%s", args, err, stderr.String())
+				}
+				if err := json.Unmarshal(stdout.Bytes(), target); err != nil {
+					t.Fatalf("Run(%q) JSON = %s error = %v", args, stdout.String(), err)
+				}
+			}
+
+			var doctor struct {
+				Desktop whatsappdb.Source `json:"desktop"`
+			}
+			runJSON([]string{"--json", "--source", tc.source, "doctor"}, &doctor)
+			if !doctor.Desktop.Available || doctor.Desktop.MessageRows != 3 || doctor.Desktop.ChatRows != 2 || doctor.Desktop.ContactRows != 2 {
+				t.Fatalf("doctor = %+v", doctor.Desktop)
+			}
+
+			var imported store.ImportStats
+			runJSON([]string{"--json", "--source", tc.source, "--db", tc.dbPath, "import"}, &imported)
+			if imported.SourcePath != tc.source || imported.DBPath != tc.dbPath || imported.Messages != 3 {
+				t.Fatalf("import = %+v", imported)
+			}
+			if _, err := os.Stat(tc.dbFile); err != nil {
+				t.Fatalf("archive path = %q: %v", tc.dbFile, err)
+			}
+
+			var status store.Status
+			runJSON([]string{"--json", "--db", tc.dbPath, "--sync", "never", "status"}, &status)
+			if status.DBPath != tc.dbPath || status.Messages != 3 || status.Contacts != 2 {
+				t.Fatalf("status = %+v", status)
+			}
+
+			var rows []struct {
+				Messages int `json:"messages"`
+			}
+			runJSON([]string{"--json", "--db", tc.dbPath, "--sync", "never", "sql", "SELECT count(*) AS messages FROM messages"}, &rows)
+			if len(rows) != 1 || rows[0].Messages != 3 {
+				t.Fatalf("sql rows = %+v", rows)
+			}
+		})
+	}
+}
+
 func TestRunSQLJSONAndReadOnlyValidation(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "archive.db")

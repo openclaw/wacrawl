@@ -746,13 +746,16 @@ func openReadOnly(path string) (*sql.DB, func(), error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, nil, err
 	}
-	dsn := sqlitedsn.File(
+	dsn, err := sqlitedsn.File(
 		path,
 		sqlitedsn.P("mode", "ro"),
 		sqlitedsn.P("_pragma", "query_only(1)"),
 		sqlitedsn.P("_pragma", "busy_timeout(5000)"),
 		sqlitedsn.P("_pragma", "temp_store(MEMORY)"),
 	)
+	if err != nil {
+		return nil, nil, err
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, nil, err
