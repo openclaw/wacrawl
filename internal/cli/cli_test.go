@@ -32,7 +32,7 @@ func TestRunEndToEnd(t *testing.T) {
 		want string
 	}{
 		{"help", []string{"--db", dbPath, "help"}, "wacrawl reads local WhatsApp"},
-		{"version", []string{"--version"}, version},
+		{"version", []string{"--version"}, currentVersion()},
 		{"metadata", []string{"--json", "metadata"}, `"id": "wacrawl"`},
 		{"doctor", []string{"--db", dbPath, "--source", source, "doctor"}, "message_rows"},
 		{"import", []string{"--db", dbPath, "--source", source, "import"}, "messages=3"},

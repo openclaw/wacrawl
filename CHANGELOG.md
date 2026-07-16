@@ -2,6 +2,10 @@
 
 ## [0.3.3] - Unreleased
 
+### Fixed
+
+- Report the module version for source-installed binaries instead of a stale hard-coded release fallback.
+
 ## [0.3.2] - 2026-07-09
 
 ### Changed
