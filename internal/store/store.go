@@ -158,13 +158,16 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
-	dsn := sqlitedsn.File(
+	dsn, err := sqlitedsn.File(
 		path,
 		sqlitedsn.P("_pragma", "foreign_keys(1)"),
 		sqlitedsn.P("_pragma", "journal_mode(WAL)"),
 		sqlitedsn.P("_pragma", "synchronous(NORMAL)"),
 		sqlitedsn.P("_pragma", "busy_timeout(5000)"),
 	)
+	if err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)

@@ -61,13 +61,16 @@ func queryReadOnlySQL(ctx context.Context, dbPath string, query string) (sqlQuer
 	if err := validateReadOnlySQL(query); err != nil {
 		return sqlQueryResult{}, err
 	}
-	dsn := sqlitedsn.File(
+	dsn, err := sqlitedsn.File(
 		dbPath,
 		sqlitedsn.P("mode", "ro"),
 		sqlitedsn.P("_pragma", "query_only(1)"),
 		sqlitedsn.P("_pragma", "busy_timeout(5000)"),
 		sqlitedsn.P("_pragma", "temp_store(MEMORY)"),
 	)
+	if err != nil {
+		return sqlQueryResult{}, err
+	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return sqlQueryResult{}, fmt.Errorf("open sqlite: %w", err)
