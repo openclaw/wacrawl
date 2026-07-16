@@ -2,6 +2,10 @@
 
 ## [0.3.3] - Unreleased
 
+### Changed
+
+- Update CrawlKit to v0.14.2 and modernc SQLite to v1.54.0.
+
 ### Fixed
 
 - Report the module version for source-installed binaries instead of a stale hard-coded release fallback.
