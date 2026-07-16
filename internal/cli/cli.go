@@ -65,7 +65,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return usageErr(err)
 	}
 	if *versionFlag {
-		_, _ = io.WriteString(stdout, version+"\n")
+		_, _ = io.WriteString(stdout, currentVersion()+"\n")
 		return nil
 	}
 	syncMode, err := parseArchiveSyncMode(*syncFlag)
