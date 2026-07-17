@@ -2,6 +2,10 @@
 
 ## [0.3.4] - Unreleased
 
+### Changed
+
+- Notarize every signed macOS release binary and verify Apple's assessment before packaging and release validation.
+
 ## [0.3.3] - 2026-07-17
 
 ### Highlights

@@ -32,20 +32,66 @@ if [[ "$identity" != "$expected_authority" ]]; then
   echo "official macOS releases require $expected_authority" >&2
   exit 1
 fi
+if [[ -z "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]]; then
+  echo "official macOS release signing requires NOTARYTOOL_KEYCHAIN_PROFILE" >&2
+  exit 1
+fi
 if [[ ! -f "$binary" ]]; then
   echo "macOS release binary not found: $binary" >&2
   exit 1
 fi
 
-codesign --force --options runtime --timestamp \
-  --identifier "$identifier" --sign "$identity" "$binary"
-codesign --verify --strict -R="$requirement" --verbose=2 "$binary"
+for tool in codesign cp ditto mktemp mv plutil xcrun; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "missing required tool: $tool" >&2
+    exit 1
+  }
+done
 
-signature=$(codesign -dvvv "$binary" 2>&1)
+binary_dir=$(cd "$(dirname "$binary")" && pwd)
+binary_name=$(basename "$binary")
+work_dir=$(mktemp -d "$binary_dir/.wacrawl-notary.XXXXXX")
+candidate="$work_dir/$binary_name"
+submission="$work_dir/$binary_name.zip"
+trap 'rm -rf "$work_dir"' EXIT
+
+# Do not replace the release artifact until signing, notarization, and Apple's
+# assessment have all succeeded.
+cp -p "$binary" "$candidate"
+codesign --force --options runtime --timestamp \
+  --identifier "$identifier" --sign "$identity" "$candidate"
+
+ditto -c -k --sequesterRsrc --keepParent "$candidate" "$submission"
+notary_result=$(xcrun notarytool submit "$submission" \
+  --keychain-profile "$NOTARYTOOL_KEYCHAIN_PROFILE" \
+  --no-s3-acceleration \
+  --wait \
+  --output-format json)
+notary_status=$(plutil -extract status raw -o - - <<<"$notary_result")
+notary_id=$(plutil -extract id raw -o - - <<<"$notary_result")
+if [[ "$notary_status" != Accepted ]]; then
+  echo "macOS release notarization status is ${notary_status:-missing}, expected Accepted" >&2
+  exit 1
+fi
+if [[ ! "$notary_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+  echo "macOS release notarization response has an invalid submission id" >&2
+  exit 1
+fi
+
+codesign --verify --strict -R="$requirement" --verbose=2 "$candidate"
+
+signature=$(codesign -dvvv "$candidate" 2>&1)
 grep -Fx "Identifier=$identifier" <<<"$signature" >/dev/null
 grep -Fx "TeamIdentifier=$team_id" <<<"$signature" >/dev/null
 grep -Fx "Authority=$expected_authority" <<<"$signature" >/dev/null
+grep -Eq '^CodeDirectory .*flags=.*\([^)]*runtime[^)]*\)' <<<"$signature" || {
+  echo "macOS release binary is missing the hardened runtime" >&2
+  exit 1
+}
 if grep -Fx "Signature=adhoc" <<<"$signature" >/dev/null; then
   echo "macOS release binary is ad-hoc signed" >&2
   exit 1
 fi
+codesign --verify --strict --check-notarization -R=notarized "$candidate"
+
+mv -f "$candidate" "$binary"
