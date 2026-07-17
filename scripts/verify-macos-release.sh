@@ -71,10 +71,15 @@ for archive in "$@"; do
   chmod 0755 "$binary"
 
   codesign --verify --strict -R="$requirement" --verbose=2 "$binary"
+  codesign --verify --strict --check-notarization -R=notarized "$binary"
   signature=$(codesign -dvvv "$binary" 2>&1)
   grep -Fx "Identifier=$identifier" <<<"$signature" >/dev/null
   grep -Fx "TeamIdentifier=$team_id" <<<"$signature" >/dev/null
   grep -Fx "Authority=$expected_authority" <<<"$signature" >/dev/null
+  grep -Eq '^CodeDirectory .*flags=.*\([^)]*runtime[^)]*\)' <<<"$signature" || {
+    echo "macOS release binary is missing the hardened runtime: $(basename "$archive")" >&2
+    exit 1
+  }
   if grep -Fx "Signature=adhoc" <<<"$signature" >/dev/null; then
     echo "macOS release binary is ad-hoc signed: $(basename "$archive")" >&2
     exit 1

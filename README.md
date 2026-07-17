@@ -742,14 +742,18 @@ make release-artifacts VERSION=v0.3.3
 `make release-artifacts` wraps GoReleaser with the shared `release-mac-app codesign-run`
 helper. The helper loads the managed OpenClaw identity from the
 authorized Mac's runtime configuration; keychain locations and credentials do
-not belong in the repository. Both Darwin binaries are signed with the stable
-identifier `org.openclaw.wacrawl` and exact identity `Developer ID Application:
-OpenClaw Foundation (FWJYW4S8P8)`.
+not belong in the repository. Set `NOTARYTOOL_KEYCHAIN_PROFILE` at runtime to a
+notarytool profile stored in the login keychain; release packaging fails closed
+when it is absent. Both Darwin binaries are signed with the hardened runtime,
+stable identifier `org.openclaw.wacrawl`, and exact identity `Developer ID
+Application: OpenClaw Foundation (FWJYW4S8P8)`, then submitted to Apple and
+required to pass the notarization assessment before they enter an archive.
 
 Create a draft GitHub release and attach the archives plus `checksums.txt` from
 `dist/`. Run the `release` workflow from protected `main` with the tag and
 `draft=true` to verify the unpublished draft, then publish it. Publication
-reruns signature verification before dispatching the Homebrew update.
+reruns signature, hardened-runtime, and notarization verification before
+dispatching the Homebrew update.
 
 Local builds and GoReleaser snapshots do not require signing credentials. They
 remain suitable for development and cross-platform CI, but are not official

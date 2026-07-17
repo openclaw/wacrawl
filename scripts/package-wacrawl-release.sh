@@ -23,8 +23,12 @@ usage() {
   echo "official wacrawl releases require $expected_authority" >&2
   exit 1
 }
+[[ -n "${NOTARYTOOL_KEYCHAIN_PROFILE:-}" ]] || {
+  echo "official wacrawl releases require NOTARYTOOL_KEYCHAIN_PROFILE" >&2
+  exit 1
+}
 
-for tool in codesign git go goreleaser lipo shasum tar; do
+for tool in codesign ditto git go goreleaser lipo plutil shasum tar xcrun; do
   command -v "$tool" >/dev/null || {
     echo "missing required tool: $tool" >&2
     exit 1
@@ -53,6 +57,7 @@ git -C "$root" tag -v "$version" >/dev/null 2>&1 || {
   cd "$root"
   WACRAWL_REQUIRE_CODESIGN=1 \
     WACRAWL_CODESIGN_IDENTITY="$CODESIGN_IDENTITY" \
+    NOTARYTOOL_KEYCHAIN_PROFILE="$NOTARYTOOL_KEYCHAIN_PROFILE" \
     goreleaser release --clean --skip=publish
 )
 

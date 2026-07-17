@@ -32,14 +32,53 @@ EOF
 
 cat > "$fake_bin/codesign" <<'EOF'
 #!/usr/bin/env bash
+printf 'codesign %s\n' "$*" >> "${MOCK_CODESIGN_LOG:?}"
 case " $* " in
+  *' --sign '*)
+    printf '\n# mock signed\n' >> "${!#}"
+    ;;
+  *' --check-notarization '*)
+    [[ "${MOCK_NOTARY_TICKET:-accepted}" == accepted ]]
+    ;;
   *' -dvvv '*)
     {
+      if [[ "${MOCK_CODESIGN_RUNTIME:-present}" == present ]]; then
+        echo 'CodeDirectory v=20500 size=512 flags=0x10000(runtime) hashes=1+0 location=embedded'
+      else
+        echo 'CodeDirectory v=20500 size=512 flags=0x0(none) hashes=1+0 location=embedded'
+      fi
       echo 'Identifier=org.openclaw.wacrawl'
       echo "Authority=${MOCK_CODESIGN_AUTHORITY:-Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)}"
       echo 'TeamIdentifier=FWJYW4S8P8'
     } >&2
     ;;
+esac
+EOF
+
+cat > "$fake_bin/ditto" <<'EOF'
+#!/usr/bin/env bash
+printf 'ditto %s\n' "$*" >> "${MOCK_DITTO_LOG:?}"
+while (( $# > 2 )); do
+  shift
+done
+cp "$1" "$2"
+EOF
+
+cat > "$fake_bin/xcrun" <<'EOF'
+#!/usr/bin/env bash
+printf 'xcrun %s\n' "$*" >> "${MOCK_XCRUN_LOG:?}"
+printf '{"id":"%s","status":"%s"}\n' \
+  "${MOCK_NOTARY_ID:-12345678-1234-1234-1234-123456789abc}" \
+  "${MOCK_NOTARY_STATUS:-Accepted}"
+EOF
+
+cat > "$fake_bin/plutil" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+case "${2:-}" in
+  status) printf '%s\n' "${MOCK_NOTARY_STATUS:-Accepted}" ;;
+  id) printf '%s\n' "${MOCK_NOTARY_ID:-12345678-1234-1234-1234-123456789abc}" ;;
+  *) exit 2 ;;
 esac
 EOF
 
@@ -69,21 +108,72 @@ EOF
 
 chmod 0755 "$fake_bin"/*
 export PATH="$fake_bin:$PATH"
+unset NOTARYTOOL_KEYCHAIN_PROFILE
+export MOCK_CODESIGN_LOG="$work_dir/codesign.log"
+export MOCK_DITTO_LOG="$work_dir/ditto.log"
+export MOCK_XCRUN_LOG="$work_dir/xcrun.log"
+: > "$MOCK_CODESIGN_LOG"
+: > "$MOCK_DITTO_LOG"
+: > "$MOCK_XCRUN_LOG"
 
+probe_seed="$work_dir/probe-seed"
 probe="$work_dir/probe"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$probe"
-chmod 0755 "$probe"
-WACRAWL_REQUIRE_CODESIGN=1 WACRAWL_CODESIGN_IDENTITY="$expected_authority" \
-  "$root/scripts/codesign-macos.sh" "$probe"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$probe_seed"
+chmod 0755 "$probe_seed"
+cp "$probe_seed" "$probe"
+if WACRAWL_REQUIRE_CODESIGN=1 WACRAWL_CODESIGN_IDENTITY="$expected_authority" \
+  "$root/scripts/codesign-macos.sh" "$probe" >/dev/null 2>&1; then
+  fail "missing notarytool profile was accepted"
+fi
+cmp "$probe_seed" "$probe" || fail "missing profile changed the release binary"
 if WACRAWL_REQUIRE_CODESIGN=1 \
   WACRAWL_CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
   "$root/scripts/codesign-macos.sh" "$probe" >/dev/null 2>&1; then
   fail "personal signing identity was accepted"
 fi
+cp "$probe_seed" "$probe"
+if MOCK_NOTARY_STATUS=Rejected WACRAWL_REQUIRE_CODESIGN=1 \
+  WACRAWL_CODESIGN_IDENTITY="$expected_authority" NOTARYTOOL_KEYCHAIN_PROFILE=test-profile \
+  "$root/scripts/codesign-macos.sh" "$probe" >/dev/null 2>&1; then
+  fail "rejected notarization was accepted"
+fi
+cmp "$probe_seed" "$probe" || fail "rejected notarization changed the release binary"
+cp "$probe_seed" "$probe"
+if MOCK_NOTARY_TICKET=rejected WACRAWL_REQUIRE_CODESIGN=1 \
+  WACRAWL_CODESIGN_IDENTITY="$expected_authority" NOTARYTOOL_KEYCHAIN_PROFILE=test-profile \
+  "$root/scripts/codesign-macos.sh" "$probe" >/dev/null 2>&1; then
+  fail "failed Apple notarization assessment was accepted"
+fi
+cmp "$probe_seed" "$probe" || fail "failed assessment changed the release binary"
+cp "$probe_seed" "$probe"
+if MOCK_CODESIGN_RUNTIME=missing WACRAWL_REQUIRE_CODESIGN=1 \
+  WACRAWL_CODESIGN_IDENTITY="$expected_authority" NOTARYTOOL_KEYCHAIN_PROFILE=test-profile \
+  "$root/scripts/codesign-macos.sh" "$probe" >/dev/null 2>&1; then
+  fail "missing hardened runtime was accepted"
+fi
+cmp "$probe_seed" "$probe" || fail "runtime verification failure changed the release binary"
+cp "$probe_seed" "$probe"
+WACRAWL_REQUIRE_CODESIGN=1 WACRAWL_CODESIGN_IDENTITY="$expected_authority" \
+  NOTARYTOOL_KEYCHAIN_PROFILE=test-profile \
+  "$root/scripts/codesign-macos.sh" "$probe"
+cmp "$probe_seed" "$probe" >/dev/null 2>&1 && fail "successful signing did not replace the binary"
+grep -F 'notarytool submit ' "$MOCK_XCRUN_LOG" >/dev/null
+grep -F -- '--keychain-profile test-profile' "$MOCK_XCRUN_LOG" >/dev/null
+grep -F -- '--wait --output-format json' "$MOCK_XCRUN_LOG" >/dev/null
+grep -F -- '--check-notarization -R=notarized' "$MOCK_CODESIGN_LOG" >/dev/null
+if find "$work_dir" -maxdepth 1 -name '.wacrawl-notary.*' -print -quit | grep -q .; then
+  fail "notarization scratch directory was not removed"
+fi
 if CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
   "$root/scripts/package-wacrawl-release.sh" v0.3.3 >/dev/null 2>&1; then
   fail "personal signing identity reached release packaging"
 fi
+if package_output=$(CODESIGN_IDENTITY="$expected_authority" \
+  "$root/scripts/package-wacrawl-release.sh" v0.3.3 2>&1); then
+  fail "release packaging accepted a missing notarytool profile"
+fi
+grep -F 'require NOTARYTOOL_KEYCHAIN_PROFILE' <<<"$package_output" >/dev/null || \
+  fail "release packaging did not explain the missing notarytool profile"
 
 assets="$work_dir/assets"
 mkdir -p "$assets"
@@ -105,9 +195,17 @@ EOF
   )
 done
 
+: > "$MOCK_CODESIGN_LOG"
 "$root/scripts/verify-macos-release.sh" v0.3.3 \
   "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" \
   "$assets/wacrawl_0.3.3_darwin_amd64.tar.gz"
+grep -F -- '--check-notarization -R=notarized' "$MOCK_CODESIGN_LOG" >/dev/null || \
+  fail "release verification skipped the Apple notarization assessment"
+if MOCK_NOTARY_TICKET=rejected \
+  "$root/scripts/verify-macos-release.sh" v0.3.3 \
+  "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" >/dev/null 2>&1; then
+  fail "release verification accepted an unnotarized binary"
+fi
 if MOCK_CODESIGN_AUTHORITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
   "$root/scripts/verify-macos-release.sh" v0.3.3 \
   "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" >/dev/null 2>&1; then
