@@ -1,10 +1,16 @@
 # Changelog
 
-## [0.3.4] - Unreleased
+## [0.3.4] - 2026-07-17
+
+### Highlights
+
+- Ship properly notarized official macOS binaries for both Apple Silicon and Intel, with Apple's assessment required before packaging.
+- Keep missing credentials, rejected submissions, and failed hardened-runtime or notarization checks out of release archives.
 
 ### Changed
 
-- Notarize every signed macOS release binary and verify Apple's assessment before packaging and release validation.
+- Notarize each signed macOS binary through the managed runtime keychain profile and recheck its ticket during release validation.
+- Update CrawlKit to v0.14.3 and terminal detection to go-isatty v0.0.23.
 
 ## [0.3.3] - 2026-07-17
 

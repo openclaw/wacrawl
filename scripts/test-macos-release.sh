@@ -165,11 +165,11 @@ if find "$work_dir" -maxdepth 1 -name '.wacrawl-notary.*' -print -quit | grep -q
   fail "notarization scratch directory was not removed"
 fi
 if CODESIGN_IDENTITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
-  "$root/scripts/package-wacrawl-release.sh" v0.3.3 >/dev/null 2>&1; then
+  "$root/scripts/package-wacrawl-release.sh" v0.3.4 >/dev/null 2>&1; then
   fail "personal signing identity reached release packaging"
 fi
 if package_output=$(CODESIGN_IDENTITY="$expected_authority" \
-  "$root/scripts/package-wacrawl-release.sh" v0.3.3 2>&1); then
+  "$root/scripts/package-wacrawl-release.sh" v0.3.4 2>&1); then
   fail "release packaging accepted a missing notarytool profile"
 fi
 grep -F 'require NOTARYTOOL_KEYCHAIN_PROFILE' <<<"$package_output" >/dev/null || \
@@ -184,10 +184,10 @@ for arch in arm64 amd64; do
   cat > "$stage/wacrawl" <<'EOF'
 #!/usr/bin/env bash
 [[ "${1:-}" == --version ]] || exit 2
-echo 0.3.3
+echo 0.3.4
 EOF
   chmod 0755 "$stage/wacrawl"
-  archive="$assets/wacrawl_0.3.3_darwin_${arch}.tar.gz"
+  archive="$assets/wacrawl_0.3.4_darwin_${arch}.tar.gz"
   tar -czf "$archive" -C "$stage" CHANGELOG.md LICENSE README.md wacrawl
   (
     cd "$assets"
@@ -196,44 +196,44 @@ EOF
 done
 
 : > "$MOCK_CODESIGN_LOG"
-"$root/scripts/verify-macos-release.sh" v0.3.3 \
-  "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" \
-  "$assets/wacrawl_0.3.3_darwin_amd64.tar.gz"
+"$root/scripts/verify-macos-release.sh" v0.3.4 \
+  "$assets/wacrawl_0.3.4_darwin_arm64.tar.gz" \
+  "$assets/wacrawl_0.3.4_darwin_amd64.tar.gz"
 grep -F -- '--check-notarization -R=notarized' "$MOCK_CODESIGN_LOG" >/dev/null || \
   fail "release verification skipped the Apple notarization assessment"
 if MOCK_NOTARY_TICKET=rejected \
-  "$root/scripts/verify-macos-release.sh" v0.3.3 \
-  "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" >/dev/null 2>&1; then
+  "$root/scripts/verify-macos-release.sh" v0.3.4 \
+  "$assets/wacrawl_0.3.4_darwin_arm64.tar.gz" >/dev/null 2>&1; then
   fail "release verification accepted an unnotarized binary"
 fi
 if MOCK_CODESIGN_AUTHORITY='Developer ID Application: Peter Steinberger (Y5PE65HELJ)' \
-  "$root/scripts/verify-macos-release.sh" v0.3.3 \
-  "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" >/dev/null 2>&1; then
+  "$root/scripts/verify-macos-release.sh" v0.3.4 \
+  "$assets/wacrawl_0.3.4_darwin_arm64.tar.gz" >/dev/null 2>&1; then
   fail "personal signature was accepted"
 fi
 
 mock_assets="$work_dir/gh-assets"
 mkdir -p "$mock_assets"
 cp "$assets/checksums.txt" "$mock_assets/1"
-cp "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" "$mock_assets/2"
-cp "$assets/wacrawl_0.3.3_darwin_amd64.tar.gz" "$mock_assets/3"
+cp "$assets/wacrawl_0.3.4_darwin_arm64.tar.gz" "$mock_assets/2"
+cp "$assets/wacrawl_0.3.4_darwin_amd64.tar.gz" "$mock_assets/3"
 for id in 4 5 6 7; do
   printf 'fixture %s\n' "$id" > "$mock_assets/$id"
 done
 mock_releases="$work_dir/releases.json"
 mock_asset_list="$work_dir/release-assets.json"
 cat > "$mock_releases" <<'EOF'
-[{"id":42,"tag_name":"v0.3.3","draft":true}]
+[{"id":42,"tag_name":"v0.3.4","draft":true}]
 EOF
 cat > "$mock_asset_list" <<'EOF'
 [
   {"name":"checksums.txt","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/1"},
-  {"name":"wacrawl_0.3.3_darwin_arm64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/2"},
-  {"name":"wacrawl_0.3.3_darwin_amd64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/3"},
-  {"name":"wacrawl_0.3.3_linux_arm64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/4"},
-  {"name":"wacrawl_0.3.3_linux_amd64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/5"},
-  {"name":"wacrawl_0.3.3_windows_arm64.zip","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/6"},
-  {"name":"wacrawl_0.3.3_windows_amd64.zip","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/7"}
+  {"name":"wacrawl_0.3.4_darwin_arm64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/2"},
+  {"name":"wacrawl_0.3.4_darwin_amd64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/3"},
+  {"name":"wacrawl_0.3.4_linux_arm64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/4"},
+  {"name":"wacrawl_0.3.4_linux_amd64.tar.gz","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/5"},
+  {"name":"wacrawl_0.3.4_windows_arm64.zip","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/6"},
+  {"name":"wacrawl_0.3.4_windows_amd64.zip","url":"https://api.github.com/repos/openclaw/wacrawl/releases/assets/7"}
 ]
 EOF
 export MOCK_GH_ASSET_DIR="$mock_assets"
@@ -241,20 +241,20 @@ export MOCK_GH_RELEASES_JSON="$mock_releases"
 export MOCK_GH_ASSETS_JSON="$mock_asset_list"
 api_download="$work_dir/api-download"
 GITHUB_REPOSITORY=openclaw/wacrawl GH_TOKEN=test \
-  "$root/scripts/download-release-assets.sh" v0.3.3 arm64 true "$api_download"
+  "$root/scripts/download-release-assets.sh" v0.3.4 arm64 true "$api_download"
 cmp "$assets/checksums.txt" "$api_download/checksums.txt"
-cmp "$assets/wacrawl_0.3.3_darwin_arm64.tar.gz" \
-  "$api_download/wacrawl_0.3.3_darwin_arm64.tar.gz"
+cmp "$assets/wacrawl_0.3.4_darwin_arm64.tar.gz" \
+  "$api_download/wacrawl_0.3.4_darwin_arm64.tar.gz"
 if GITHUB_REPOSITORY=openclaw/wacrawl GH_TOKEN=test \
-  "$root/scripts/download-release-assets.sh" v0.3.3 arm64 false "$work_dir/wrong-draft" \
+  "$root/scripts/download-release-assets.sh" v0.3.4 arm64 false "$work_dir/wrong-draft" \
     >/dev/null 2>&1; then
   fail "draft release matched published-release lookup"
 fi
 invalid_assets="$work_dir/invalid-release-assets.json"
-jq 'map(if .name == "wacrawl_0.3.3_linux_amd64.tar.gz" then .url = "https://example.invalid/5" else . end)' \
+jq 'map(if .name == "wacrawl_0.3.4_linux_amd64.tar.gz" then .url = "https://example.invalid/5" else . end)' \
   "$mock_asset_list" > "$invalid_assets"
 if MOCK_GH_ASSETS_JSON="$invalid_assets" GITHUB_REPOSITORY=openclaw/wacrawl GH_TOKEN=test \
-  "$root/scripts/download-release-assets.sh" v0.3.3 arm64 true "$work_dir/invalid-url" \
+  "$root/scripts/download-release-assets.sh" v0.3.4 arm64 true "$work_dir/invalid-url" \
     >/dev/null 2>&1; then
   fail "invalid release asset API URL was accepted"
 fi
