@@ -58,8 +58,8 @@ trap 'rm -rf "$work_dir"' EXIT
 # Do not replace the release artifact until signing, notarization, and Apple's
 # assessment have all succeeded.
 cp -p "$binary" "$candidate"
-codesign --force --options runtime --timestamp \
-  --identifier "$identifier" --sign "$identity" "$candidate"
+codesign --force --sign "$identity" --timestamp --options runtime \
+  --identifier "$identifier" "$candidate"
 
 ditto -c -k --sequesterRsrc --keepParent "$candidate" "$submission"
 notary_result=$(xcrun notarytool submit "$submission" \
