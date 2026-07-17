@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to verify (e.g. v0.3.2)"
+        description: "Release tag to verify (e.g. v0.3.3)"
         required: true
         type: string
       draft:

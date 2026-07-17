@@ -733,10 +733,10 @@ maintainer Mac. CI validates snapshots and published assets; it never receives
 the Developer ID private key or publishes unsigned Darwin binaries.
 
 ```bash
-git tag -s v0.3.2 -m "Release 0.3.2"
+git tag -s v0.3.3 -m "Release 0.3.3"
 git push origin main
-git push origin v0.3.2
-make release-artifacts VERSION=v0.3.2
+git push origin v0.3.3
+make release-artifacts VERSION=v0.3.3
 ```
 
 `make release-artifacts` wraps GoReleaser with the shared `release-mac-app codesign-run`

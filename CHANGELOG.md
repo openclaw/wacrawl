@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.3.3] - Unreleased
+## [0.3.3] - 2026-07-17
+
+### Highlights
+
+- Use relative `--source` and `--db` paths reliably across source inspection, imports, archive status, and read-only SQL.
+- Report the installed module version for source-built binaries so `wacrawl --version` matches the actual build.
 
 ### Changed
 
@@ -8,8 +13,8 @@
 
 ### Fixed
 
-- Accept relative archive and WhatsApp source paths anywhere SQLite file URIs are constructed (#41).
-- Report the module version for source-installed binaries instead of a stale hard-coded release fallback.
+- Resolve relative archive and WhatsApp source paths at the shared SQLite file-URI boundary (#41).
+- Report the installed module version for source-built binaries instead of a stale hard-coded release fallback.
 
 ## [0.3.2] - 2026-07-09
 
