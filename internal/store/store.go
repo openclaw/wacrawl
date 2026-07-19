@@ -35,7 +35,10 @@ type Store struct {
 type ImportStats struct {
 	Mode                string    `json:"mode"`
 	SourceIdentity      string    `json:"-"`
+	SourceStoreIdentity string    `json:"-"`
 	AccountIdentity     string    `json:"-"`
+	AdoptSource         bool      `json:"-"`
+	SourceSnapshotAt    time.Time `json:"-"`
 	SourceNewestMessage time.Time `json:"-"`
 	SourcePath          string    `json:"source_path"`
 	DBPath              string    `json:"db_path"`
@@ -70,6 +73,7 @@ type Status struct {
 	OldestMessage       time.Time `json:"oldest_message,omitzero"`
 	NewestMessage       time.Time `json:"newest_message,omitzero"`
 	LastImportAt        time.Time `json:"last_import_at,omitzero"`
+	LastSourceSnapshot  time.Time `json:"-"`
 	LastSource          string    `json:"last_source,omitempty"`
 	LastSourceMessages  int       `json:"last_source_messages,omitempty"`
 	LastSourceContacts  int       `json:"last_source_contacts,omitempty"`
@@ -384,6 +388,10 @@ delete from sync_state;`); err != nil {
 		now = time.Now().UTC()
 	}
 	observedAt := unix(now)
+	sourceSnapshotAt := stats.SourceSnapshotAt
+	if sourceSnapshotAt.IsZero() {
+		sourceSnapshotAt = now
+	}
 	prepareImportTombstones(now, chats, groups, participants, messages)
 	if err := prepareStoredParentTombstones(ctx, tx, chats, groups, participants, messages); err != nil {
 		return err
@@ -479,6 +487,7 @@ last_seen_at=excluded.last_seen_at`,
 		"source_messages":       fmt.Sprintf("%d", stats.Messages),
 		"source_contacts":       fmt.Sprintf("%d", stats.Contacts),
 		"source_newest_message": formatSyncTime(stats.SourceNewestMessage),
+		"source_snapshot_at":    formatSyncTime(sourceSnapshotAt),
 	} {
 		if _, err := tx.ExecContext(ctx, `insert into sync_state(key,value,updated_at) values(?,?,?)
 on conflict(key) do update set value=excluded.value, updated_at=excluded.updated_at`, key, value, observedAt); err != nil {
@@ -488,6 +497,12 @@ on conflict(key) do update set value=excluded.value, updated_at=excluded.updated
 	if strings.TrimSpace(mergeSource) != "" {
 		if _, err := tx.ExecContext(ctx, `insert into sync_state(key,value,updated_at) values('merge_source_path',?,?)
 on conflict(key) do update set value=excluded.value, updated_at=excluded.updated_at`, mergeSource, observedAt); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(stats.SourceStoreIdentity) != "" {
+		if _, err := tx.ExecContext(ctx, `insert into sync_state(key,value,updated_at) values('merge_source_store_identity',?,?)
+on conflict(key) do update set value=excluded.value, updated_at=excluded.updated_at`, strings.TrimSpace(stats.SourceStoreIdentity), observedAt); err != nil {
 			return err
 		}
 	}
@@ -511,6 +526,15 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
+	var existingStore string
+	err = tx.QueryRowContext(ctx, `select value from sync_state where key='merge_source_store_identity'`).Scan(&existingStore)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	if strings.HasPrefix(existingStrong, "wa-store:") {
+		existingStore = existingStrong
+		existingStrong = ""
+	}
 	var existingWeak string
 	if existingStrong == "" {
 		err = tx.QueryRowContext(ctx, `select value from sync_state where key='source_path'`).Scan(&existingWeak)
@@ -522,38 +546,12 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 	if strongSource != "" && existingStrong != "" && strongSource != existingStrong {
 		return "", fmt.Errorf("archive is bound to WhatsApp source %q, not %q; use a separate --db or import --restore", existingStrong, strongSource)
 	}
+	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
+	if existingStore != "" && incomingStore != existingStore {
+		return "", errors.New("archive is bound to a different WhatsApp Desktop store; use a separate --db or import --restore")
+	}
 	if existingStrong == "" && existingWeak != "" && weakSource != existingWeak {
 		return "", fmt.Errorf("archive is bound to WhatsApp source path %q, not %q; use a separate --db or import --restore", existingWeak, weakSource)
-	}
-	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
-	var existingAccount string
-	err := tx.QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&existingAccount)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	existingAccount = strings.TrimSpace(existingAccount)
-	if existingAccount != "" {
-		if accountIdentity == "" || existingAccount != accountIdentity {
-			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
-		}
-	} else if strongSource != "" && accountIdentity == "" {
-		return "", errors.New("cannot establish WhatsApp account identity for merge; use a separate --db or import --restore")
-	} else if accountIdentity != "" {
-		proven, err := archiveContinuityProven(ctx, tx, messages)
-		if err != nil {
-			return "", err
-		}
-		if !proven {
-			return "", errors.New("cannot verify that this WhatsApp account matches the existing archive; use a separate --db or import --restore")
-		}
-	} else if strongSource == "" {
-		proven, err := archiveContinuityProven(ctx, tx, messages)
-		if err != nil {
-			return "", err
-		}
-		if !proven {
-			return "", errors.New("cannot merge into an existing archive without source identity or overlapping stable events; use a separate --db or import --restore")
-		}
 	}
 	for _, message := range messages {
 		existing, found, err := messageBySourcePK(ctx, tx, message.SourcePK)
@@ -564,32 +562,46 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 			return "", fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", message.SourcePK)
 		}
 	}
+	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
+	var existingAccount string
+	err = tx.QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&existingAccount)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	existingAccount = strings.TrimSpace(existingAccount)
+	if strings.HasPrefix(existingAccount, "wa-store:") {
+		// Early schema-v2 builds mistook Core Data's persistent-store UUID for
+		// an account identity. It is only a source marker and cannot prove that
+		// a logout/login cycle kept the same WhatsApp account.
+		existingAccount = ""
+	}
+	if existingAccount != "" {
+		if accountIdentity == "" || existingAccount != accountIdentity {
+			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
+		}
+	} else {
+		entityRows, err := archiveEntityRows(ctx, tx)
+		if err != nil {
+			return "", err
+		}
+		if entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
+			return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
+		}
+	}
 	if strongSource != "" {
 		return strongSource, nil
 	}
 	return existingStrong, nil
 }
 
-func archiveContinuityProven(ctx context.Context, tx *sql.Tx, incoming []Message) (bool, error) {
+func archiveEntityRows(ctx context.Context, tx *sql.Tx) (int, error) {
 	var entityRows int
 	if err := tx.QueryRowContext(ctx, `select
 (select count(*) from contacts)+(select count(*) from chats)+(select count(*) from groups)+
 (select count(*) from group_participants)+(select count(*) from messages)`).Scan(&entityRows); err != nil {
-		return false, err
+		return 0, err
 	}
-	if entityRows == 0 {
-		return true, nil
-	}
-	for _, candidate := range incoming {
-		existing, found, err := messageBySourcePK(ctx, tx, candidate.SourcePK)
-		if err != nil {
-			return false, err
-		}
-		if found && !messageIdentityConflict(existing, candidate) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return entityRows, nil
 }
 
 func formatSyncTime(value time.Time) string {
@@ -776,6 +788,7 @@ func messageEventID(sourcePK int64) string {
 
 func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.Time) error {
 	sourcePayloadCleared := m.SourceTextNull && m.RawType == 0 && m.MediaTitle == "" && m.MediaType == "" && m.MediaPath == "" && m.MediaURL == "" && m.DeletedAt.IsZero()
+	preserveExistingFTS := false
 	if m.EventID == "" {
 		m.EventID = messageEventID(m.SourcePK)
 	}
@@ -788,18 +801,14 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 		if messageIdentityConflict(existing, m) {
 			return fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", m.SourcePK)
 		}
-		if !existing.DeletedAt.IsZero() && m.DeletedAt.IsZero() {
+		if !existing.DeletedAt.IsZero() {
 			return nil
 		}
 		if sourcePayloadCleared && (!existing.DeletedAt.IsZero() || messageHasPayload(existing)) {
 			m.Tombstone = sourceTombstone(observedAt, "whatsapp_payload_cleared")
+			preserveExistingFTS = messageHasPayload(existing)
 		}
 		m.EventID = existing.EventID
-		if !existing.DeletedAt.IsZero() && !m.DeletedAt.IsZero() {
-			m.DeletedAt = existing.DeletedAt
-			m.DeletionSource = existing.DeletionSource
-			m.DeletionReason = existing.DeletionReason
-		}
 		previous, err := canonicalMessageJSON(existing)
 		if err != nil {
 			return err
@@ -812,8 +821,6 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 			reason := "whatsapp_edit"
 			if !m.DeletedAt.IsZero() && existing.DeletedAt.IsZero() {
 				reason = m.DeletionReason
-			} else if m.DeletedAt.IsZero() && !existing.DeletedAt.IsZero() {
-				reason = "whatsapp_restore"
 			}
 			if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values(?,?,?,?,?)`,
 				existing.EventID, previous, unix(observedAt), "whatsapp-desktop", reason); err != nil {
@@ -839,13 +846,15 @@ last_seen_at=excluded.last_seen_at`,
 		nullableUnix(m.DeletedAt), nullableString(m.DeletionSource), nullableString(m.DeletionReason), unix(m.LastSeenAt)); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `delete from messages_fts where rowid=(select rowid from messages where source_pk=?)`, m.SourcePK); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `insert into messages_fts(rowid,text,chat,sender,media)
+	if !preserveExistingFTS {
+		if _, err := tx.ExecContext(ctx, `delete from messages_fts where rowid=(select rowid from messages where source_pk=?)`, m.SourcePK); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `insert into messages_fts(rowid,text,chat,sender,media)
 values((select rowid from messages where source_pk=?),?,?,?,?)`, m.SourcePK,
-		strings.TrimSpace(m.Text+" "+m.MediaTitle), m.ChatName, m.SenderName, m.MediaType); err != nil {
-		return err
+			strings.TrimSpace(m.Text+" "+m.MediaTitle), m.ChatName, m.SenderName, m.MediaType); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1016,6 +1025,9 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 	lastImport, _ := s.q.GetSyncState(ctx, "last_import_at")
 	if t, err := time.Parse(time.RFC3339Nano, lastImport); err == nil {
 		out.LastImportAt = t
+	}
+	if value, err := s.q.GetSyncState(ctx, "source_snapshot_at"); err == nil {
+		out.LastSourceSnapshot, _ = time.Parse(time.RFC3339Nano, value)
 	}
 	out.LastSource, _ = s.q.GetSyncState(ctx, "source_path")
 	if value, err := s.q.GetSyncState(ctx, "source_messages"); err == nil {

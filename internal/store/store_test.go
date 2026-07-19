@@ -2,12 +2,640 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestMergeAllPreservesAbsentRowsAndTracksTombstones(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "merge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	chat := Chat{JID: "group@g.us", Kind: "group", Name: "Group", LastMessageAt: now}
+	group := Group{JID: chat.JID, Name: chat.Name, OwnerJID: "owner@s.whatsapp.net", CreatedAt: now.Add(-time.Hour)}
+	participant := GroupParticipant{GroupJID: chat.JID, UserJID: "alice@s.whatsapp.net", ContactName: "Alice", IsActive: true}
+	messages := []Message{
+		{SourcePK: 1, ChatJID: chat.JID, ChatName: chat.Name, MessageID: "a", SenderJID: participant.UserJID, Timestamp: now, Text: "first body", RawType: 0, MessageType: "text"},
+		{SourcePK: 2, ChatJID: chat.JID, ChatName: chat.Name, MessageID: "b", SenderJID: participant.UserJID, Timestamp: now.Add(time.Second), Text: "destination only", RawType: 0, MessageType: "text"},
+	}
+	stats := ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", Contacts: 1, Chats: 1, Groups: 1, Participants: 1, Messages: 2, FinishedAt: now}
+	if err := st.MergeAll(ctx, stats,
+		[]Contact{{JID: participant.UserJID, FullName: "Alice"}}, []Chat{chat}, []Group{group}, []GroupParticipant{participant}, messages); err != nil {
+		t.Fatal(err)
+	}
+	var originalRowID int64
+	var eventID string
+	if err := st.DB().QueryRowContext(ctx, `select rowid,event_id from messages where source_pk=1`).Scan(&originalRowID, &eventID); err != nil {
+		t.Fatal(err)
+	}
+	if eventID != "wa:1" {
+		t.Fatalf("event id = %q", eventID)
+	}
+	bySource, err := st.MessageBySourcePK(ctx, 1)
+	if err != nil || bySource.EventID != eventID {
+		t.Fatalf("message by source = %+v, %v", bySource, err)
+	}
+	if _, err := st.MessageBySourcePK(ctx, 999); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("missing message by source error = %v", err)
+	}
+
+	// An empty observation is not an authoritative deletion set.
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now.Add(time.Minute)}, nil, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 2 || status.Chats != 1 || status.Contacts != 1 || status.DeletedMessages != 0 {
+		t.Fatalf("empty merge changed canonical rows: %+v", status)
+	}
+
+	edited := messages[0]
+	edited.Text = "edited body"
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", Messages: 1, FinishedAt: now.Add(2 * time.Minute)}, nil, nil, nil, nil, []Message{edited}); err != nil {
+		t.Fatal(err)
+	}
+	var editedRowID int64
+	if err := st.DB().QueryRowContext(ctx, `select rowid from messages where source_pk=1`).Scan(&editedRowID); err != nil {
+		t.Fatal(err)
+	}
+	if editedRowID != originalRowID {
+		t.Fatalf("message row identity changed: before=%d after=%d", originalRowID, editedRowID)
+	}
+	status, err = st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.MessageRevisions != 1 {
+		t.Fatalf("edit revisions = %d", status.MessageRevisions)
+	}
+	var revision string
+	if err := st.DB().QueryRowContext(ctx, `select payload_json from message_revisions where event_id='wa:1'`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(revision, "first body") {
+		t.Fatalf("revision did not retain prior payload: %s", revision)
+	}
+	exported, err := st.ExportAll(ctx)
+	if err != nil || len(exported.Revisions) != 1 || exported.Revisions[0].EventID != eventID {
+		t.Fatalf("revision export = %+v, %v", exported.Revisions, err)
+	}
+
+	chat.Removed = true
+	deletedAt := now.Add(3 * time.Minute)
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", Chats: 1, FinishedAt: deletedAt}, nil, []Chat{chat}, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	status, err = st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Chats != 0 || status.Groups != 0 || status.Participants != 0 || status.Messages != 0 || status.DeletedChats != 1 || status.DeletedGroups != 1 || status.DeletedParticipants != 1 || status.DeletedMessages != 2 {
+		t.Fatalf("subordinate tombstones = %+v", status)
+	}
+	for table, reason := range map[string]string{
+		"chats": "whatsapp_removed", "groups": "parent_chat_deleted", "group_participants": "parent_group_deleted", "messages": "parent_chat_deleted",
+	} {
+		var missing int
+		query := `select count(*) from ` + table + ` where deleted_at is not null and deletion_source='whatsapp-desktop' and deletion_reason=?`
+		if err := st.DB().QueryRowContext(ctx, query, reason).Scan(&missing); err != nil {
+			t.Fatal(err)
+		}
+		if missing == 0 {
+			t.Fatalf("%s missing tombstone reason %q", table, reason)
+		}
+	}
+	results, err := st.Search(ctx, MessageFilter{Query: "destination", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("tombstoned child remained searchable: %+v", results)
+	}
+
+	var firstDeletedAt int64
+	if err := st.DB().QueryRowContext(ctx, `select deleted_at from chats where jid=?`, chat.JID).Scan(&firstDeletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", Chats: 1, FinishedAt: deletedAt.Add(time.Minute)}, nil, []Chat{chat}, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var repeatedDeletedAt int64
+	if err := st.DB().QueryRowContext(ctx, `select deleted_at from chats where jid=?`, chat.JID).Scan(&repeatedDeletedAt); err != nil {
+		t.Fatal(err)
+	}
+	if repeatedDeletedAt != firstDeletedAt {
+		t.Fatalf("repeated tombstone moved timestamp: before=%d after=%d", firstDeletedAt, repeatedDeletedAt)
+	}
+	var revisionsBefore int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from message_revisions`).Scan(&revisionsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", Messages: 1, FinishedAt: deletedAt.Add(time.Minute)}, nil, nil, nil, nil, []Message{edited}); err != nil {
+		t.Fatal(err)
+	}
+	var revisionsAfter int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from message_revisions`).Scan(&revisionsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if revisionsAfter != revisionsBefore {
+		t.Fatalf("stored parent tombstone created revision: before=%d after=%d", revisionsBefore, revisionsAfter)
+	}
+
+	chat.Removed = false
+	chat.LastMessageAt = deletedAt.Add(time.Minute)
+	participant.IsActive = true
+	newMessage := Message{SourcePK: 3, ChatJID: chat.JID, ChatName: chat.Name, MessageID: "c", SenderJID: participant.UserJID, Timestamp: chat.LastMessageAt, Text: "new lifecycle", RawType: 0, MessageType: "text"}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", Chats: 1, Groups: 1, Participants: 1, Messages: 1, FinishedAt: deletedAt.Add(2 * time.Minute)},
+		nil, []Chat{chat}, []Group{group}, []GroupParticipant{participant}, []Message{newMessage}); err != nil {
+		t.Fatal(err)
+	}
+	status, err = st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Chats != 1 || status.Groups != 1 || status.Participants != 1 || status.Messages != 1 || status.DeletedMessages != 2 {
+		t.Fatalf("authoritative resurrection = %+v", status)
+	}
+	results, err = st.Search(ctx, MessageFilter{Query: "lifecycle", Limit: 10})
+	if err != nil || len(results) != 1 {
+		t.Fatalf("resurrected message search = %+v, %v", results, err)
+	}
+}
+
+func TestIncomingParentTombstoneMarksWholeFamily(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "family.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 16, 0, 0, 0, time.UTC)
+	chat := Chat{JID: "group@g.us", Kind: "group", Removed: true}
+	group := Group{JID: chat.JID, Name: "Group"}
+	participant := GroupParticipant{GroupJID: chat.JID, UserJID: "member", IsActive: true}
+	message := Message{Tombstone: Tombstone{DeletedAt: now.Add(-time.Minute), DeletionSource: "operator", DeletionReason: "explicit_child"}, SourcePK: 42, ChatJID: chat.JID, MessageID: "message", Timestamp: now, Text: "body", RawType: 0}
+	contact := Contact{Tombstone: Tombstone{DeletedAt: now}, JID: "deleted-contact"}
+	if err := st.MergeAll(ctx, ImportStats{FinishedAt: now, Contacts: 1, Chats: 1, Groups: 1, Participants: 1, Messages: 1},
+		[]Contact{contact}, []Chat{chat}, []Group{group}, []GroupParticipant{participant}, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.DeletedContacts != 1 || status.DeletedChats != 1 || status.DeletedGroups != 1 || status.DeletedParticipants != 1 || status.DeletedMessages != 1 {
+		t.Fatalf("family tombstones = %+v", status)
+	}
+	exported, err := st.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exported.Contacts) != 1 || len(exported.Chats) != 1 || len(exported.Groups) != 1 || len(exported.Participants) != 1 || len(exported.Messages) != 1 {
+		t.Fatalf("tombstone export = %+v", exported)
+	}
+	if exported.Contacts[0].DeletionSource != "snapshot" || exported.Contacts[0].DeletionReason != "explicit_tombstone" {
+		t.Fatalf("default tombstone provenance = %+v", exported.Contacts[0])
+	}
+	if exported.Groups[0].DeletionReason != "parent_chat_deleted" || exported.Participants[0].DeletionReason != "parent_group_deleted" || exported.Messages[0].DeletionSource != "operator" || exported.Messages[0].DeletionReason != "explicit_child" {
+		t.Fatalf("child reasons group=%+v participant=%+v message=%+v", exported.Groups[0], exported.Participants[0], exported.Messages[0])
+	}
+	deleted, err := st.Messages(ctx, MessageFilter{IncludeDeleted: true, Limit: 10})
+	if err != nil || len(deleted) != 1 || deleted[0].EventID != "wa:42" {
+		t.Fatalf("include deleted = %+v, %v", deleted, err)
+	}
+	contacts, err := st.Contacts(ctx)
+	if err != nil || len(contacts) != 0 {
+		t.Fatalf("live contacts = %+v, %v", contacts, err)
+	}
+}
+
+func TestMergeAllTombstonesObservableWhatsAppDeletion(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "delete.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 13, 0, 0, 0, time.UTC)
+	message := Message{SourcePK: 9, ChatJID: "chat", ChatName: "Chat", MessageID: "stanza", Timestamp: now, Text: "secret body", RawType: 0, MessageType: "text"}
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 1}, nil, []Chat{{JID: "chat", Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	message.Text = ""
+	message.SourceTextNull = true
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now.Add(time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 0 || status.DeletedMessages != 1 || status.MessageRevisions != 1 {
+		t.Fatalf("observable delete status = %+v", status)
+	}
+	results, err := st.Search(ctx, MessageFilter{Query: "secret", Limit: 10})
+	if err != nil || len(results) != 0 {
+		t.Fatalf("normal search exposed tombstone: %+v, %v", results, err)
+	}
+	results, err = st.Search(ctx, MessageFilter{Query: "secret", IncludeDeleted: true, Limit: 10})
+	if err != nil || len(results) != 1 || results[0].EventID != "wa:9" || !strings.Contains(results[0].Snippet, "[secret]") {
+		t.Fatalf("include-deleted search = %+v, %v", results, err)
+	}
+	var reason, payload string
+	if err := st.DB().QueryRowContext(ctx, `select deletion_reason from messages where source_pk=9`).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select payload_json from message_revisions where event_id='wa:9'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "whatsapp_payload_cleared" || !strings.Contains(payload, "secret body") {
+		t.Fatalf("delete reason=%q revision=%s", reason, payload)
+	}
+	firstSeenNull := Message{SourcePK: 10, ChatJID: "chat", MessageID: "empty", Timestamp: now, RawType: 0, SourceTextNull: true}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now.Add(2 * time.Minute), Messages: 2}, nil, nil, nil, nil, []Message{message, firstSeenNull}); err != nil {
+		t.Fatal(err)
+	}
+	status, err = st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 1 || status.DeletedMessages != 1 {
+		t.Fatalf("first-seen null payload was inferred deleted: %+v", status)
+	}
+}
+
+func TestReplaceAllIsExplicitExactRestore(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "restore.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 14, 0, 0, 0, time.UTC)
+	chat := Chat{JID: "chat", Kind: "dm"}
+	first := Message{SourcePK: 1, ChatJID: chat.JID, MessageID: "one", Timestamp: now, Text: "one", RawType: 0}
+	second := Message{SourcePK: 2, ChatJID: chat.JID, MessageID: "two", Timestamp: now, Text: "two", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 2}, nil, []Chat{chat}, nil, nil, []Message{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	first.Text = "edited"
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now.Add(time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceAll(ctx, ImportStats{FinishedAt: now.Add(2 * time.Minute), Messages: 1}, nil, []Chat{chat}, nil, nil, []Message{first}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 1 || status.MessageRevisions != 0 {
+		t.Fatalf("restore status = %+v", status)
+	}
+	var removed int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from messages where source_pk=2`).Scan(&removed); err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("restore retained destination-only rows: %d", removed)
+	}
+}
+
+func TestMergeAllRejectsDifferentSourceAndIdentityCollision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "identity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 17, 0, 0, 0, time.UTC)
+	message := Message{SourcePK: 1, ChatJID: "chat-a", MessageID: "one", Timestamp: now, Text: "original", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-a", FinishedAt: now, Messages: 1}, nil,
+		[]Chat{{JID: message.ChatJID, Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-b", FinishedAt: now.Add(time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{message}); err == nil || !strings.Contains(err.Error(), "separate --db") {
+		t.Fatalf("different source error = %v", err)
+	}
+	collision := message
+	collision.ChatJID = "chat-b"
+	collision.MessageID = "different"
+	collision.Text = "replacement"
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-a", FinishedAt: now.Add(time.Minute), Messages: 1}, nil,
+		[]Chat{{JID: collision.ChatJID, Kind: "dm"}}, nil, nil, []Message{collision}); err == nil || !strings.Contains(err.Error(), "different event") {
+		t.Fatalf("identity collision error = %v", err)
+	}
+	stored, err := st.MessageBySourcePK(ctx, 1)
+	if err != nil || stored.Text != "original" || stored.ChatJID != "chat-a" {
+		t.Fatalf("collision changed stored message: %+v, %v", stored, err)
+	}
+	if err := st.ReplaceAll(ctx, ImportStats{SourcePath: "/account-b", SourceIdentity: "/account-b", AccountIdentity: "account-b", FinishedAt: now.Add(2 * time.Minute), Messages: 1}, nil,
+		[]Chat{{JID: collision.ChatJID, Kind: "dm"}}, nil, nil, []Message{collision}); err != nil {
+		t.Fatalf("explicit restore should switch sources: %v", err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-b", SourceIdentity: "/account-b", AccountIdentity: "account-b", FinishedAt: now.Add(3 * time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{collision}); err != nil {
+		t.Fatalf("merge after explicit source switch: %v", err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-a", SourceIdentity: "/account-a", AccountIdentity: "account-a", FinishedAt: now.Add(4 * time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{collision}); err == nil || !strings.Contains(err.Error(), "separate --db") {
+		t.Fatalf("restore did not bind replacement source: %v", err)
+	}
+}
+
+func TestPortableRestoreRequiresExplicitSourceAdoption(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "portable.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 17, 30, 0, 0, time.UTC)
+	message := Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", Timestamp: now, Text: "body", RawType: 0}
+	if err := st.ReplaceAll(ctx, ImportStats{SourcePath: "backup:/portable", FinishedAt: now, Messages: 1}, nil,
+		[]Chat{{JID: message.ChatJID, Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	stats := ImportStats{SourcePath: "/account-a", SourceIdentity: "/account-a", AccountIdentity: "account-a", FinishedAt: now.Add(time.Minute), Messages: 1}
+	if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{message}); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("portable restore accepted an unverified source: %v", err)
+	}
+	stats.AdoptSource = true
+	if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatalf("explicit source adoption failed: %v", err)
+	}
+}
+
+func TestMergeInheritsLegacySourceBinding(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "legacy-binding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 17, 45, 0, 0, time.UTC)
+	message := Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", Timestamp: now, Text: "body", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{FinishedAt: now, Messages: 1}, nil, []Chat{{JID: "chat", Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DB().ExecContext(ctx, `insert into sync_state(key,value,updated_at) values('source_path','/account-a',?) on conflict(key) do update set value=excluded.value`, now.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "/account-b", AccountIdentity: "account-b", FinishedAt: now}, nil, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "separate --db") {
+		t.Fatalf("different source bypassed legacy binding: %v", err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-a", SourceIdentity: "/account-a", AccountIdentity: "account-a", AdoptSource: true, FinishedAt: now, Messages: 1}, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatalf("matching source failed legacy binding: %v", err)
+	}
+	var binding string
+	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_source_path'`).Scan(&binding); err != nil || binding != "/account-a" {
+		t.Fatalf("seeded binding = %q, %v", binding, err)
+	}
+}
+
+func TestMergeUpgradesAndChecksSourceStoreBinding(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store-binding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 17, 50, 0, 0, time.UTC)
+	message := Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", Timestamp: now, Text: "body", RawType: 0}
+	base := ImportStats{SourcePath: "/source", SourceIdentity: "/source", AccountIdentity: "wa-account:fixture", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, base, nil, []Chat{{JID: "chat", Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	base.SourceStoreIdentity = "wa-store:first"
+	if err := st.MergeAll(ctx, base, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatalf("store binding upgrade: %v", err)
+	}
+	base.SourceStoreIdentity = ""
+	if err := st.MergeAll(ctx, base, nil, nil, nil, nil, []Message{message}); err == nil || !strings.Contains(err.Error(), "different WhatsApp Desktop store") {
+		t.Fatalf("missing established store error = %v", err)
+	}
+	base.SourceStoreIdentity = "wa-store:second"
+	if err := st.MergeAll(ctx, base, nil, nil, nil, nil, []Message{message}); err == nil || !strings.Contains(err.Error(), "different WhatsApp Desktop store") {
+		t.Fatalf("different store error = %v", err)
+	}
+}
+
+func TestMergeAdoptsEarlyStoreUUIDAccountBinding(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "early-v2.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 17, 55, 0, 0, time.UTC)
+	message := Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", Timestamp: now, Text: "body", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{FinishedAt: now, Messages: 1}, nil, []Chat{{JID: "chat", Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		"source_path": "/source", "merge_source_path": "wa-store:legacy", "merge_account_identity": "wa-store:legacy",
+	} {
+		if _, err := st.DB().ExecContext(ctx, `insert into sync_state(key,value,updated_at) values(?,?,?) on conflict(key) do update set value=excluded.value`, key, value, now.Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exported, err := st.ExportAll(ctx)
+	if err != nil || exported.AccountIdentity != "" || exported.SourceStoreIdentity != "wa-store:legacy" {
+		t.Fatalf("early v2 export identity = %+v, %v", exported, err)
+	}
+	if err := exported.Validate(); err != nil {
+		t.Fatalf("early v2 export validation: %v", err)
+	}
+	stats := ImportStats{SourcePath: "/source", SourceIdentity: "/source", SourceStoreIdentity: "wa-store:legacy", AccountIdentity: "wa-account:verified", AdoptSource: true, FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatalf("early v2 binding adoption: %v", err)
+	}
+}
+
+func TestStrongSourceIdentityRequiresAccountContinuity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "continuity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 7, 18, 18, 0, 0, 0, time.UTC)
+	if err := st.ValidateImport(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-a"}, nil, false); err != nil {
+		t.Fatalf("empty archive preflight: %v", err)
+	}
+	existing := Message{SourcePK: 1, ChatJID: "chat-a", MessageID: "one", Timestamp: now, Text: "body", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{FinishedAt: now, Messages: 1}, nil, []Chat{{JID: existing.ChatJID, Kind: "dm"}}, nil, nil, []Message{existing}); err != nil {
+		t.Fatal(err)
+	}
+	disjoint := Message{SourcePK: 2, ChatJID: "chat-b", MessageID: "two", Timestamp: now, Text: "other", RawType: 0}
+	if err := st.ValidateImport(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-a"}, []Message{disjoint}, false); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("unverified account binding error = %v", err)
+	}
+	if err := st.ValidateImport(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-a"}, []Message{existing}, false); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("event overlap bypassed source adoption: %v", err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-a", AdoptSource: true, FinishedAt: now, Messages: 1}, nil, nil, nil, nil, []Message{existing}); err != nil {
+		t.Fatalf("explicit account adoption: %v", err)
+	}
+	if err := st.ValidateImport(ctx, ImportStats{SourceIdentity: "/source"}, []Message{existing}, false); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("missing account identity error = %v", err)
+	}
+	if err := st.ValidateImport(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-a"}, []Message{disjoint}, false); err != nil {
+		t.Fatalf("bound account identity should admit new events: %v", err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-b", FinishedAt: now, Messages: 1}, nil, nil, nil, nil, []Message{existing}); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("different account error = %v", err)
+	}
+	collision := existing
+	collision.MessageID = "different"
+	if err := st.ValidateImport(ctx, ImportStats{SourceIdentity: "/source", AccountIdentity: "account-a"}, []Message{collision}, false); err == nil || !strings.Contains(err.Error(), "different event") {
+		t.Fatalf("collision preflight error = %v", err)
+	}
+	if err := st.ValidateImport(ctx, ImportStats{}, []Message{{SourcePK: 0}}, true); err == nil || !strings.Contains(err.Error(), "empty source_pk") {
+		t.Fatalf("invalid restore preflight error = %v", err)
+	}
+}
+
+func TestSourceIdentityHelpers(t *testing.T) {
+	if got := legacySourceIdentity("  "); got != "" {
+		t.Fatalf("empty legacy identity = %q", got)
+	}
+	if got := legacySourceIdentity("backup:/tmp/repo"); got != "" {
+		t.Fatalf("backup legacy identity = %q", got)
+	}
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "source-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := legacySourceIdentity(link); got != want {
+		t.Fatalf("symlink legacy identity = %q, want %q", got, want)
+	}
+	if got := formatSyncTime(time.Time{}); got != "" {
+		t.Fatalf("zero sync time = %q", got)
+	}
+}
+
+func TestMessageRevisionComparisonUsesPersistedUnixTime(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "timestamps.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	instant := time.Unix(1_752_841_800, 987_654_321).UTC()
+	message := Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", Timestamp: instant, Text: "body", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: instant, Messages: 1}, nil, []Chat{{JID: "chat", Kind: "dm"}}, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	message.Timestamp = instant.In(time.FixedZone("fixture", 5*60*60))
+	if err := st.MergeAll(ctx, ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: instant.Add(time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	poisoned := Message{SourcePK: 2, ChatJID: "chat", MessageID: "poisoned", Timestamp: time.Date(12000, 1, 1, 0, 0, 0, 0, time.UTC), Text: "future", RawType: 0}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: instant.Add(2 * time.Minute), Messages: 2}, nil, nil, nil, nil, []Message{message, poisoned}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/fixture", SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: instant.Add(3 * time.Minute), Messages: 1}, nil, nil, nil, nil, []Message{poisoned}); err != nil {
+		t.Fatalf("repeat poisoned timestamp merge: %v", err)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.MessageRevisions != 0 || status.Messages != 2 {
+		t.Fatalf("timestamp-only revisions = %+v", status)
+	}
+}
+
+func TestMigrateV1ArchiveLosslessly(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := `
+create table chats (jid text primary key, kind text not null, name text, last_message_at integer, unread_count integer not null default 0, archived integer not null default 0, removed integer not null default 0, hidden integer not null default 0, raw_session_type integer not null default 0);
+create table contacts (jid text primary key, phone text, full_name text, first_name text, last_name text, business_name text, username text, lid text, about_text text, updated_at integer);
+create table groups (jid text primary key, name text, owner_jid text, created_at integer);
+create table group_participants (group_jid text not null, user_jid text not null, contact_name text, first_name text, is_admin integer not null default 0, is_active integer not null default 0, primary key(group_jid,user_jid));
+create table messages (rowid integer primary key autoincrement, source_pk integer not null unique, chat_jid text not null, chat_name text, msg_id text not null, sender_jid text, sender_name text, ts integer not null, from_me integer not null, text text, raw_type integer not null, message_type text, media_type text, media_title text, media_path text, media_url text, media_size integer, starred integer not null default 0);
+create virtual table messages_fts using fts5(text, chat, sender, media);
+create table sync_state (key text primary key, value text not null, updated_at integer not null);
+insert into contacts values('alice','1','Alice','','','','','','',100);
+insert into chats values('chat','dm','Chat',200,0,0,0,0,0);
+insert into groups values('chat','Chat','alice',50);
+insert into group_participants values('chat','alice','Alice','',1,1);
+insert into messages(source_pk,chat_jid,chat_name,msg_id,sender_jid,sender_name,ts,from_me,text,raw_type,message_type,media_type,media_title,media_path,media_url,media_size,starred) values(7,'chat','Chat','stanza','alice','Alice',200,0,'legacy body',0,'text','','','','',0,0);
+insert into messages_fts(rowid,text,chat,sender,media) values((select rowid from messages where source_pk=7),'legacy body','Chat','Alice','');
+insert into sync_state values('last_import_at','2026-07-17T12:00:00Z',1000);
+pragma user_version=1;`
+	if _, err := db.ExecContext(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	var rowID int64
+	if err := db.QueryRowContext(ctx, `select rowid from messages where source_pk=7`).Scan(&rowID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var version int
+	var migratedRowID int64
+	var eventID string
+	var tombstones int
+	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select rowid,event_id,(deleted_at is not null)+(deletion_source is not null)+(deletion_reason is not null) from messages where source_pk=7`).Scan(&migratedRowID, &eventID, &tombstones); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion || migratedRowID != rowID || eventID != "wa:7" || tombstones != 0 {
+		t.Fatalf("migration version=%d rowid=%d/%d event=%q tombstones=%d", version, migratedRowID, rowID, eventID, tombstones)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Contacts != 1 || status.Chats != 1 || status.Groups != 1 || status.Participants != 1 || status.Messages != 1 {
+		t.Fatalf("migrated counts = %+v", status)
+	}
+	results, err := st.Search(ctx, MessageFilter{Query: "legacy", Limit: 10})
+	if err != nil || len(results) != 1 || results[0].Text != "legacy body" {
+		t.Fatalf("migrated search = %+v, %v", results, err)
+	}
+	var quickCheck string
+	if err := st.DB().QueryRowContext(ctx, `pragma quick_check`).Scan(&quickCheck); err != nil {
+		t.Fatal(err)
+	}
+	if quickCheck != "ok" {
+		t.Fatalf("quick_check = %q", quickCheck)
+	}
+	if _, err := st.DB().ExecContext(ctx, `insert into messages(source_pk,event_id,chat_jid,msg_id,ts,from_me,raw_type,starred,last_seen_at) values(8,'','chat','bad',200,0,0,0,1000)`); err == nil {
+		t.Fatal("empty event identity insert should fail")
+	}
+}
 
 func TestStoreReplaceStatusListSearch(t *testing.T) {
 	ctx := context.Background()
@@ -136,8 +764,31 @@ func TestStoreReplaceStatusListSearch(t *testing.T) {
 	if err := (SnapshotData{Messages: []Message{{SourcePK: 1}, {SourcePK: 1}}}).Validate(); err == nil {
 		t.Fatal("expected duplicate source_pk validation error")
 	}
+	if err := (SnapshotData{AccountIdentity: "raw-account"}).Validate(); err == nil {
+		t.Fatal("expected invalid account identity error")
+	}
+	if err := (SnapshotData{SourceStoreIdentity: "raw-store"}).Validate(); err == nil {
+		t.Fatal("expected invalid source-store identity error")
+	}
 	if err := (SnapshotData{Messages: []Message{{}}}).Validate(); err == nil {
 		t.Fatal("expected empty source_pk validation error")
+	}
+	if err := (SnapshotData{Messages: []Message{{SourcePK: 1, EventID: "same"}, {SourcePK: 2, EventID: "same"}}}).Validate(); err == nil {
+		t.Fatal("expected duplicate event_id validation error")
+	}
+	validRevision := MessageRevision{EventID: "wa:1", PayloadJSON: `{}`, RecordedAt: now, EventSource: "fixture", Reason: "edit"}
+	if err := (SnapshotData{Messages: []Message{{SourcePK: 1}}, Revisions: []MessageRevision{validRevision}}).Validate(); err != nil {
+		t.Fatalf("valid revision rejected: %v", err)
+	}
+	unknownRevision := validRevision
+	unknownRevision.EventID = "wa:missing"
+	if err := (SnapshotData{Messages: []Message{{SourcePK: 1}}, Revisions: []MessageRevision{unknownRevision}}).Validate(); err == nil {
+		t.Fatal("expected unknown revision event validation error")
+	}
+	incompleteRevision := validRevision
+	incompleteRevision.Reason = ""
+	if err := (SnapshotData{Messages: []Message{{SourcePK: 1}}, Revisions: []MessageRevision{incompleteRevision}}).Validate(); err == nil {
+		t.Fatal("expected incomplete revision validation error")
 	}
 }
 
@@ -156,6 +807,24 @@ func TestOpenRequiresPath(t *testing.T) {
 	}
 	if !fromUnix(0).IsZero() {
 		t.Fatal("zero unix should be zero time")
+	}
+}
+
+func TestOpenRejectsNewerSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`pragma user_version=999`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(context.Background(), path); err == nil || !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("newer schema error = %v", err)
 	}
 }
 
@@ -219,6 +888,33 @@ func TestReplaceAllDuplicateSourcePKFails(t *testing.T) {
 	}
 	if status.Messages != 0 {
 		t.Fatalf("failed replace should roll back, got %+v", status)
+	}
+}
+
+func TestValidateImportRejectsInvalidEventIdentity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	cases := []struct {
+		name     string
+		messages []Message
+		want     string
+	}{
+		{name: "empty source pk", messages: []Message{{EventID: "event"}}, want: "empty source_pk"},
+		{name: "whitespace event id", messages: []Message{{SourcePK: 1, EventID: "  "}}, want: "empty event_id"},
+		{name: "generated event collision", messages: []Message{{SourcePK: 1}, {SourcePK: 2, EventID: "wa:1"}}, want: "duplicate message event_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := st.ValidateImport(ctx, ImportStats{}, tc.messages, false)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("validation error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -374,10 +1070,10 @@ values('c@s.whatsapp.net', 'dm', 'C', ?, 0, 0, 0, 0, 0)
 		t.Fatal(err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
-insert into messages(source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
+insert into messages(source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
 values
-	(1, 'c@s.whatsapp.net', 'C', 'poison', '', '', ?, 0, 'poison', 0, 'text', '', '', '', '', 0, 0),
-	(2, 'c@s.whatsapp.net', 'C', 'valid', '', '', ?, 0, 'valid', 0, 'text', '', '', '', '', 0, 0)
+	(1, 'wa:1', 'c@s.whatsapp.net', 'C', 'poison', '', '', ?, 0, 'poison', 0, 'text', '', '', '', '', 0, 0),
+	(2, 'wa:2', 'c@s.whatsapp.net', 'C', 'valid', '', '', ?, 0, 'valid', 0, 'text', '', '', '', '', 0, 0)
 `, maxJSONUnixSecond+1, valid.Unix()); err != nil {
 		t.Fatal(err)
 	}
@@ -427,10 +1123,10 @@ values('c@s.whatsapp.net', 'dm', 'C', ?, 0, 0, 0, 0, 0)
 		t.Fatal(err)
 	}
 	if _, err := st.DB().ExecContext(ctx, `
-insert into messages(source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
+insert into messages(source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
 values
-	(1, 'c@s.whatsapp.net', 'C', 'poison', '', '', ?, 0, 'poison', 0, 'text', '', '', '', '', 0, 0),
-	(2, 'c@s.whatsapp.net', 'C', 'valid', '', '', ?, 0, 'valid', 0, 'text', '', '', '', '', 0, 0)
+	(1, 'wa:1', 'c@s.whatsapp.net', 'C', 'poison', '', '', ?, 0, 'poison', 0, 'text', '', '', '', '', 0, 0),
+	(2, 'wa:2', 'c@s.whatsapp.net', 'C', 'valid', '', '', ?, 0, 'valid', 0, 'text', '', '', '', '', 0, 0)
 `, maxJSONUnixSecond+1, valid.Unix()); err != nil {
 		t.Fatal(err)
 	}

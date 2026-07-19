@@ -22,10 +22,12 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	source := openFixtureStore(t, "source.db")
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
 	data := store.SnapshotData{
-		Contacts:     []store.Contact{{JID: "alice@s.whatsapp.net", FullName: "Alice", UpdatedAt: now}},
-		Chats:        []store.Chat{{JID: "chat@g.us", Kind: "group", Name: "Launch Group", LastMessageAt: now}},
-		Groups:       []store.Group{{JID: "chat@g.us", Name: "Launch Group", OwnerJID: "owner@s.whatsapp.net", CreatedAt: now}},
-		Participants: []store.GroupParticipant{{GroupJID: "chat@g.us", UserJID: "alice@s.whatsapp.net", ContactName: "Alice", IsAdmin: true, IsActive: true}},
+		SourceStoreIdentity: "wa-store:fixture",
+		AccountIdentity:     "wa-account:fixture",
+		Contacts:            []store.Contact{{JID: "alice@s.whatsapp.net", FullName: "Alice", UpdatedAt: now}},
+		Chats:               []store.Chat{{JID: "chat@g.us", Kind: "group", Name: "Launch Group", LastMessageAt: now}},
+		Groups:              []store.Group{{JID: "chat@g.us", Name: "Launch Group", OwnerJID: "owner@s.whatsapp.net", CreatedAt: now}},
+		Participants:        []store.GroupParticipant{{GroupJID: "chat@g.us", UserJID: "alice@s.whatsapp.net", ContactName: "Alice", IsAdmin: true, IsActive: true}},
 		Messages: []store.Message{
 			{SourcePK: 1, ChatJID: "chat@g.us", ChatName: "Launch Group", MessageID: "a", SenderJID: "alice@s.whatsapp.net", SenderName: "Alice", Timestamp: now, Text: "secret launch text", RawType: 0, MessageType: "text"},
 		},
@@ -40,6 +42,11 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	data.Messages[0].MediaType = "image"
 	data.Messages[0].MediaPath = mediaPath
 	if err := source.ImportSnapshot(ctx, data, "/fixture", now); err != nil {
+		t.Fatal(err)
+	}
+	edited := data.Messages[0]
+	edited.Text = "edited launch text"
+	if err := source.MergeAll(ctx, store.ImportStats{SourcePath: "/fixture", SourceStoreIdentity: data.SourceStoreIdentity, AccountIdentity: data.AccountIdentity, Messages: 1, FinishedAt: now.Add(time.Minute)}, nil, nil, nil, nil, []store.Message{edited}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,14 +81,14 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if statusRepo != repo || status.Counts.Messages != 1 || status.Counts.MediaFiles != 1 {
+	if statusRepo != repo || status.Counts.Messages != 1 || status.Counts.Revisions != 1 || status.Counts.MediaFiles != 1 {
 		t.Fatalf("unexpected backup status repo=%s status=%+v", statusRepo, status)
 	}
 	manifest, err := readManifest(repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !manifest.Encrypted || manifest.Counts.Messages != 1 || len(manifest.Files) != 1 {
+	if !manifest.Encrypted || manifest.Counts.Messages != 1 || manifest.Counts.Revisions != 1 || manifest.Counts.Identity != 1 || len(manifest.Files) != 1 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
 	ciphertext, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(manifest.Shards[len(manifest.Shards)-1].Path))) // #nosec G304 -- test reads a generated shard path from its temp repo manifest.
@@ -107,12 +114,26 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if pulled.Messages != 1 || pulled.MediaFiles != 1 {
 		t.Fatalf("unexpected pull result: %+v", pulled)
 	}
-	results, err := restored.Search(ctx, store.MessageFilter{Query: "secret", Limit: 10})
+	results, err := restored.Search(ctx, store.MessageFilter{Query: "edited", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 1 || results[0].Text != "secret launch text" {
+	if len(results) != 1 || results[0].Text != "edited launch text" {
 		t.Fatalf("restore search mismatch: %+v", results)
+	}
+	restoredStatus, err := restored.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredStatus.MessageRevisions != 1 {
+		t.Fatalf("restored revisions = %d", restoredStatus.MessageRevisions)
+	}
+	restoredData, err := restored.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restoredData.Revisions) != 1 || !strings.Contains(restoredData.Revisions[0].PayloadJSON, "secret launch text") || restoredData.AccountIdentity != data.AccountIdentity || restoredData.SourceStoreIdentity != data.SourceStoreIdentity {
+		t.Fatalf("restored revision = %+v", restoredData.Revisions)
 	}
 	wantRestoredMedia := filepath.Join(filepath.Dir(restored.Path()), "media", "photo.jpg ")
 	if results[0].MediaPath != wantRestoredMedia {
@@ -131,7 +152,7 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if noMediaPulled.Messages != 1 || noMediaPulled.MediaFiles != 1 {
 		t.Fatalf("unexpected no-media pull result: %+v", noMediaPulled)
 	}
-	noMediaResults, err := noMediaRestored.Search(ctx, store.MessageFilter{Query: "secret", Limit: 10})
+	noMediaResults, err := noMediaRestored.Search(ctx, store.MessageFilter{Query: "edited", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,11 +191,11 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 	if secondPulled.Messages != 1 {
 		t.Fatalf("unexpected second-recipient pull result: %+v", secondPulled)
 	}
-	secondResults, err := secondRestored.Search(ctx, store.MessageFilter{Query: "secret", Limit: 10})
+	secondResults, err := secondRestored.Search(ctx, store.MessageFilter{Query: "edited", Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(secondResults) != 1 || secondResults[0].Text != "secret launch text" {
+	if len(secondResults) != 1 || secondResults[0].Text != "edited launch text" {
 		t.Fatalf("second-recipient restore mismatch: %+v", secondResults)
 	}
 	sameRecipients, err := Push(ctx, source, opts)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,9 @@ func TestImportDesktopCoreDataShape(t *testing.T) {
 	if status.Messages != 4 || status.MediaMessages != 1 || status.UnreadChats != 1 || status.UnreadMessages != 2 {
 		t.Fatalf("unexpected status: %+v", status)
 	}
+	if stats.SourceIdentity == "" || stats.SourceStoreIdentity == "" || stats.AccountIdentity == "" || stats.SourceSnapshotAt.IsZero() || stats.SourceSnapshotAt.After(stats.FinishedAt) || status.LastSourceSnapshot.IsZero() || status.LastSourceNewest.IsZero() || !status.LastSourceNewest.Equal(time.Unix(appleEpoch+700000003, 0).UTC()) {
+		t.Fatalf("missing source identity or watermark: stats=%+v status=%+v", stats, status)
+	}
 
 	results, err := archive.Search(ctx, store.MessageFilter{Query: "launch", Limit: 10})
 	if err != nil {
@@ -66,6 +70,366 @@ func TestImportDesktopCoreDataShape(t *testing.T) {
 	}
 	if !dms[1].FromMe || dms[1].SenderName != "me" {
 		t.Fatalf("outgoing dm sender wrong: %+v", dms[1])
+	}
+}
+
+func TestImportDesktopTurnsNullTextTransitionIntoTombstone(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chatDB.ExecContext(ctx, `update ZWAMESSAGE set ZTEXT=null where Z_PK=1`); err != nil {
+		_ = chatDB.Close()
+		t.Fatal(err)
+	}
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	status, err := archive.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 3 || status.DeletedMessages != 1 || status.MessageRevisions != 1 {
+		t.Fatalf("null-text import status = %+v", status)
+	}
+	var reason, revision string
+	if err := archive.DB().QueryRowContext(ctx, `select deletion_reason from messages where source_pk=1`).Scan(&reason); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.DB().QueryRowContext(ctx, `select payload_json from message_revisions where event_id='wa:1'`).Scan(&revision); err != nil {
+		t.Fatal(err)
+	}
+	if reason != "whatsapp_payload_cleared" || !strings.Contains(revision, `"text":"hello"`) {
+		t.Fatalf("reason=%q revision=%s", reason, revision)
+	}
+}
+
+func TestImportDesktopRejectsAccountSwitchAtSameStore(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `
+delete from ZWAMESSAGE;
+insert into ZWAMEDIAITEM values (2, 10, 'foreign.bin', '', 'foreign', '', 7);
+insert into ZWAMESSAGE values (10, 1, null, 2, 'account-b', 0, 700000010, 'other account', 1, 0, '111@s.whatsapp.net', '', 'Other');`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	axolotlDB, err := sql.Open("sqlite", filepath.Join(source, axolotlDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, axolotlDB, `update ZWAZMDACCOUNT set ZACCOUNTJIDSTRING='other-owner@s.whatsapp.net', ZUSERJIDSTRING='other-owner@s.whatsapp.net'`)
+	if err := axolotlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "foreign.bin"), []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("same-path account switch error = %v", err)
+	}
+	mediaRoot := filepath.Join(t.TempDir(), "media")
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, CopyMedia: true, MediaRoot: mediaRoot}); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("copy-media account switch error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mediaRoot, "foreign.bin")); !os.IsNotExist(err) {
+		t.Fatalf("rejected import wrote foreign media: %v", err)
+	}
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, Restore: true}); err != nil {
+		t.Fatalf("explicit restore should switch accounts: %v", err)
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatalf("merge after restore should have event continuity: %v", err)
+	}
+}
+
+func TestReadSourceIdentity(t *testing.T) {
+	ctx := context.Background()
+	t.Run("message churn does not rotate", func(t *testing.T) {
+		source := t.TempDir()
+		createFixtureDBs(t, source)
+		before, err := readSourceIdentity(ctx, filepath.Join(source, chatDBName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `update ZWAMESSAGE set ZFROMJID='owner@s.whatsapp.net' where ZISFROMME=1`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readSourceIdentity(ctx, filepath.Join(source, chatDBName))
+		if err != nil || identity != before || !strings.HasPrefix(identity, "wa-store:") {
+			t.Fatalf("identity rotated: before=%q after=%q err=%v", before, identity, err)
+		}
+	})
+	t.Run("missing marker", func(t *testing.T) {
+		source := t.TempDir()
+		createFixtureDBs(t, source)
+		db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `drop table Z_METADATA`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readSourceIdentity(ctx, filepath.Join(source, chatDBName))
+		if err != nil || identity != "" {
+			t.Fatalf("missing identity = %q, %v", identity, err)
+		}
+	})
+	t.Run("empty store uuid", func(t *testing.T) {
+		source := t.TempDir()
+		createFixtureDBs(t, source)
+		db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `update Z_METADATA set Z_UUID=''`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readSourceIdentity(ctx, filepath.Join(source, chatDBName))
+		if err != nil || identity != "" {
+			t.Fatalf("empty identity = %q, %v", identity, err)
+		}
+	})
+	t.Run("missing metadata row", func(t *testing.T) {
+		source := t.TempDir()
+		createFixtureDBs(t, source)
+		db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `delete from Z_METADATA`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readSourceIdentity(ctx, filepath.Join(source, chatDBName))
+		if err != nil || identity != "" {
+			t.Fatalf("missing metadata identity = %q, %v", identity, err)
+		}
+	})
+}
+
+func TestReadAccountIdentity(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	path := filepath.Join(source, axolotlDBName)
+	before, err := readAccountIdentity(ctx, path)
+	if err != nil || !strings.HasPrefix(before, "wa-account:") {
+		t.Fatalf("account identity = %q, %v", before, err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `update ZWAZMDACCOUNT set ZUSERJIDSTRING='other-owner@s.whatsapp.net'`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := readAccountIdentity(ctx, path)
+	if err != nil || after == before || !strings.HasPrefix(after, "wa-account:") {
+		t.Fatalf("account switch identity: before=%q after=%q err=%v", before, after, err)
+	}
+	if identity, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName)); err != nil || identity != "" {
+		t.Fatalf("missing account database identity = %q, %v", identity, err)
+	}
+
+	ambiguous := t.TempDir()
+	createFixtureDBs(t, ambiguous)
+	db, err = sql.Open("sqlite", filepath.Join(ambiguous, axolotlDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `insert into ZWAZMDACCOUNT values (2, 'second@s.whatsapp.net', 'second@s.whatsapp.net')`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAccountIdentity(ctx, filepath.Join(ambiguous, axolotlDBName)); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") || strings.Contains(err.Error(), "--restore") {
+		t.Fatalf("ambiguous account identity error = %v", err)
+	}
+}
+
+func TestReadAccountIdentityFallbacks(t *testing.T) {
+	ctx := context.Background()
+	t.Run("ZMD account JID", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), axolotlDBName)
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `create table ZWAZMDACCOUNT (ZACCOUNTJIDSTRING varchar, ZUSERJIDSTRING varchar); insert into ZWAZMDACCOUNT values ('owner@s.whatsapp.net', '')`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readAccountIdentity(ctx, path)
+		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
+			t.Fatalf("ZMD account fallback = %q, %v", identity, err)
+		}
+	})
+	t.Run("signal account columns", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), axolotlDBName)
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `
+create table ZWAAXOLOTLIDENTITY (ZACCOUNTJIDSTRING varchar);
+create table ZWAAXOLOTLSESSION (ZACCOUNTJIDSTRING varchar);
+create table ZWASENDERKEY (ZACCOUNTJIDSTRING varchar);
+insert into ZWAAXOLOTLIDENTITY values ('OWNER@S.WHATSAPP.NET');
+insert into ZWAAXOLOTLSESSION values ('owner@s.whatsapp.net');
+insert into ZWASENDERKEY values ('owner@s.whatsapp.net');`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readAccountIdentity(ctx, path)
+		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
+			t.Fatalf("signal fallback = %q, %v", identity, err)
+		}
+	})
+	t.Run("empty schema", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), axolotlDBName)
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `create table unrelated (value text)`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readAccountIdentity(ctx, path)
+		if err != nil || identity != "" {
+			t.Fatalf("empty schema identity = %q, %v", identity, err)
+		}
+	})
+}
+
+func TestExtractRejectsAccountChangeDuringSnapshot(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	snap, err := SnapshotPath(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(snap.Root) }()
+	db, err := sql.Open("sqlite", filepath.Join(snap.Root, axolotlDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `update ZWAZMDACCOUNT set ZUSERJIDSTRING='other@s.whatsapp.net'`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(ctx, snap); err == nil || !strings.Contains(err.Error(), "changed while") {
+		t.Fatalf("snapshot account change error = %v", err)
+	}
+}
+
+func TestImportDesktopUpgradesPathBindingToStoreFingerprint(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `drop table Z_METADATA`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	stats, err := Import(ctx, archive, source)
+	if err != nil || stats.SourceStoreIdentity != "" {
+		t.Fatalf("path-bound import = %+v, %v", stats, err)
+	}
+	db, err = sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `create table Z_METADATA (Z_VERSION integer primary key, Z_UUID varchar(255), Z_PLIST blob); insert into Z_METADATA values (1, 'late-store-marker', null)`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = Import(ctx, archive, source)
+	if err != nil || stats.SourceStoreIdentity == "" {
+		t.Fatalf("store fingerprint upgrade = %+v, %v", stats, err)
+	}
+	var binding string
+	if err := archive.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_source_store_identity'`).Scan(&binding); err != nil || binding != stats.SourceStoreIdentity {
+		t.Fatalf("store fingerprint binding = %q, %v", binding, err)
+	}
+	db, err = sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `drop table Z_METADATA`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "different WhatsApp Desktop store") {
+		t.Fatalf("missing established store marker error = %v", err)
+	}
+}
+
+func TestImportDesktopWithoutAccountIdentityCannotMergeNonemptyArchive(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	if err := os.Remove(filepath.Join(source, axolotlDBName)); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatalf("initial unbound import: %v", err)
+	}
+	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("unbound merge error = %v", err)
+	}
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("adoption without account identity error = %v", err)
 	}
 }
 
@@ -554,6 +918,36 @@ func TestClassifiers(t *testing.T) {
 	}
 }
 
+func TestCanonicalSourcePath(t *testing.T) {
+	if path, err := canonicalSourcePath(""); err != nil || path != "" {
+		t.Fatalf("empty canonical path = %q, %v", path, err)
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "source-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	path, err := canonicalSourcePath(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != want {
+		t.Fatalf("canonical path = %q, want %q", path, want)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	path, err = canonicalSourcePath(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != missing {
+		t.Fatalf("missing canonical path = %q, want %q", path, missing)
+	}
+}
+
 func createFixtureDBs(t *testing.T, dir string) {
 	t.Helper()
 	chat, err := sql.Open("sqlite", filepath.Join(dir, chatDBName))
@@ -567,6 +961,8 @@ create table ZWAGROUPINFO (Z_PK integer primary key, ZCHATSESSION integer, ZOWNE
 create table ZWAGROUPMEMBER (Z_PK integer primary key, ZCHATSESSION integer, ZMEMBERJID varchar, ZCONTACTNAME varchar, ZFIRSTNAME varchar, ZISADMIN integer, ZISACTIVE integer);
 create table ZWAMEDIAITEM (Z_PK integer primary key, ZMESSAGE integer, ZMEDIALOCALPATH varchar, ZMEDIAURL varchar, ZTITLE varchar, ZVCARDNAME varchar, ZFILESIZE integer);
 create table ZWAMESSAGE (Z_PK integer primary key, ZCHATSESSION integer, ZGROUPMEMBER integer, ZMEDIAITEM integer, ZSTANZAID varchar, ZISFROMME integer, ZMESSAGEDATE timestamp, ZTEXT varchar, ZMESSAGETYPE integer, ZSTARRED integer, ZFROMJID varchar, ZTOJID varchar, ZPUSHNAME varchar);
+create table Z_METADATA (Z_VERSION integer primary key, Z_UUID varchar(255), Z_PLIST blob);
+insert into Z_METADATA values (1, 'fixture-account-a', null);
 insert into ZWACHATSESSION values (1, '111@s.whatsapp.net', 'Bob', 700000020, 0, 0, 0, 0, 0);
 insert into ZWACHATSESSION values (2, '123@g.us', 'Launch Group', 700000010, 2, 0, 0, 0, 1);
 insert into ZWAGROUPINFO values (1, 2, 'owner@s.whatsapp.net', 699999000);
@@ -587,6 +983,15 @@ insert into ZWAMESSAGE values (4, 1, null, null, 'dm-in', 0, 700000003, 'duplica
 create table ZWAADDRESSBOOKCONTACT (ZWHATSAPPID varchar, ZPHONENUMBER varchar, ZFULLNAME varchar, ZGIVENNAME varchar, ZLASTNAME varchar, ZBUSINESSNAME varchar, ZUSERNAME varchar, ZLID varchar, ZABOUTTEXT varchar, ZLASTUPDATED timestamp);
 insert into ZWAADDRESSBOOKCONTACT values ('111@s.whatsapp.net', '+111', 'Bob', 'Bob', '', '', '', '', '', 700000000);
 insert into ZWAADDRESSBOOKCONTACT values ('222@s.whatsapp.net', '+222', 'Alice Contact', 'Alice', '', '', '', '222', '', 700000000);
+`)
+	axolotl, err := sql.Open("sqlite", filepath.Join(dir, axolotlDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = axolotl.Close() }()
+	mustExec(t, axolotl, `
+create table ZWAZMDACCOUNT (Z_PK integer primary key, ZACCOUNTJIDSTRING varchar, ZUSERJIDSTRING varchar);
+insert into ZWAZMDACCOUNT values (1, 'fixture-owner@s.whatsapp.net', 'fixture-owner@s.whatsapp.net');
 `)
 }
 

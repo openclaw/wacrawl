@@ -82,16 +82,31 @@ func archiveNeedsSyncCheck(status store.Status, maxAge time.Duration) bool {
 }
 
 func sourceAheadOfArchive(source whatsappdb.Source, status store.Status) bool {
-	if status.LastImportAt.IsZero() || status.Messages == 0 {
+	if status.LastImportAt.IsZero() {
 		return true
 	}
-	if source.MessageRows != 0 && source.MessageRows != status.Messages {
+	lastMessages := status.LastSourceMessages
+	if !status.SourceMessagesKnown {
+		lastMessages = status.Messages + status.DeletedMessages
+	}
+	if source.MessageRowsKnown && source.MessageRows != lastMessages {
 		return true
 	}
-	if source.ContactRows != 0 && source.ContactRows != status.Contacts {
+	lastContacts := status.LastSourceContacts
+	if !status.SourceContactsKnown {
+		lastContacts = status.Contacts + status.DeletedContacts
+	}
+	if source.ContactRowsKnown && source.ContactRows != lastContacts {
 		return true
 	}
-	if cache.SQLiteModifiedAfter(source.ContactsDB, status.LastImportAt) {
+	snapshotAt := status.LastSourceSnapshot
+	if snapshotAt.IsZero() {
+		snapshotAt = status.LastImportAt
+	}
+	if cache.SQLiteModifiedAfter(source.ContactsDB, snapshotAt) {
+		return true
+	}
+	if cache.SQLiteModifiedAfter(source.ChatDB, snapshotAt) {
 		return true
 	}
 	if strings.TrimSpace(source.NewestMessage) == "" {
@@ -101,7 +116,11 @@ func sourceAheadOfArchive(source whatsappdb.Source, status store.Status) bool {
 	if err != nil {
 		return false
 	}
-	return sourceNewest.After(status.NewestMessage)
+	watermark := status.LastSourceNewest
+	if watermark.IsZero() {
+		watermark = status.NewestObserved
+	}
+	return sourceNewest.After(watermark)
 }
 
 func (a *app) warnSync(format string, args ...any) {

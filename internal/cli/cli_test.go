@@ -60,6 +60,139 @@ func TestRunEndToEnd(t *testing.T) {
 	}
 }
 
+func TestRunImportMergesByDefaultAndRestoreReplaces(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createDesktopFixture(t, source)
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	var stdout, stderr bytes.Buffer
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import", "--restore", "--adopt-source"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("restore/adopt conflict = %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import"}, &stdout, &stderr); err != nil {
+		t.Fatalf("initial import: %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "mode=merge") {
+		t.Fatalf("initial import mode: %s", stdout.String())
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 18, 15, 0, 0, 0, time.UTC)
+	var sourceIdentity, sourceStoreIdentity, accountIdentity string
+	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_source_path'`).Scan(&sourceIdentity); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := st.MessageBySourcePK(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&accountIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_source_store_identity'`).Scan(&sourceStoreIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MergeAll(ctx, store.ImportStats{SourcePath: source, SourceIdentity: sourceIdentity, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity, FinishedAt: now, Messages: 2}, nil,
+		[]store.Chat{{JID: "historical", Kind: "dm"}}, nil, nil,
+		[]store.Message{existing, {SourcePK: 99, ChatJID: "historical", MessageID: "historical", Timestamp: now, Text: "retained history", RawType: 0}}); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "sync"}, &stdout, &stderr); err != nil {
+		t.Fatalf("merge sync: %v stderr=%s", err, stderr.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := st.Status(ctx)
+	if err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if status.Messages != 4 {
+		_ = st.Close()
+		t.Fatalf("default merge messages = %d", status.Messages)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import", "--restore"}, &stdout, &stderr); err != nil {
+		t.Fatalf("restore import: %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "mode=restore") {
+		t.Fatalf("restore import mode: %s", stdout.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	status, err = st.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 3 {
+		t.Fatalf("exact restore messages = %d", status.Messages)
+	}
+}
+
+func TestRunImportAdoptsLegacyArchiveExplicitly(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createDesktopFixture(t, source)
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 18, 15, 0, 0, 0, time.UTC)
+	legacy := store.Message{SourcePK: 99, ChatJID: "legacy", MessageID: "legacy", Timestamp: now, Text: "retained legacy history", RawType: 0}
+	if err := st.ReplaceAll(ctx, store.ImportStats{SourcePath: "backup:legacy", FinishedAt: now, Messages: 1}, nil,
+		[]store.Chat{{JID: legacy.ChatJID, Kind: "dm"}}, nil, nil, []store.Message{legacy}); err != nil {
+		_ = st.Close()
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("unverified import error = %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import", "--adopt-source"}, &stdout, &stderr); err != nil {
+		t.Fatalf("adopt source: %v stderr=%s", err, stderr.String())
+	}
+	st, err = store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	if _, err := st.MessageBySourcePK(ctx, legacy.SourcePK); err != nil {
+		t.Fatalf("adoption dropped legacy history: %v", err)
+	}
+	var accountBinding string
+	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&accountBinding); err != nil || !strings.HasPrefix(accountBinding, "wa-account:") {
+		t.Fatalf("account binding = %q, %v", accountBinding, err)
+	}
+}
+
 func TestRunRelativeAndAbsolutePathContracts(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -715,24 +848,57 @@ func TestSyncArchiveKeepsExistingArchiveWhenSourceUnavailable(t *testing.T) {
 
 func TestSyncDecisionHelpers(t *testing.T) {
 	now := time.Now().UTC()
-	status := store.Status{Messages: 3, NewestMessage: now, LastImportAt: now.Add(-time.Hour)}
+	status := store.Status{Messages: 3, NewestMessage: now, NewestObserved: now, LastImportAt: now.Add(-time.Hour)}
 	if !archiveNeedsSyncCheck(status, 15*time.Minute) {
 		t.Fatal("old import should need sync check")
 	}
 	if archiveNeedsSyncCheck(status, -1) {
 		t.Fatal("negative max age should disable auto checks")
 	}
-	if !sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, NewestMessage: now.Add(time.Second).Format(time.RFC3339)}, status) {
+	if !sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Add(time.Second).Format(time.RFC3339)}, status) {
 		t.Fatal("newer source timestamp should be ahead")
 	}
-	if !sourceAheadOfArchive(whatsappdb.Source{MessageRows: 4, NewestMessage: now.Format(time.RFC3339)}, status) {
+	if !sourceAheadOfArchive(whatsappdb.Source{MessageRows: 4, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, status) {
 		t.Fatal("different source row count should be ahead")
 	}
-	if sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, NewestMessage: now.Format(time.RFC3339)}, status) {
+	if sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, status) {
 		t.Fatal("equal source should not be ahead")
 	}
-	if sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, NewestMessage: "not-time"}, status) {
+	chatDB := filepath.Join(t.TempDir(), "ChatStorage.sqlite")
+	if err := os.WriteFile(chatDB, []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(chatDB, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if !sourceAheadOfArchive(whatsappdb.Source{ChatDB: chatDB, MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, status) {
+		t.Fatal("in-place ChatStorage change should be ahead")
+	}
+	snapshotStatus := status
+	snapshotStatus.LastImportAt = now.Add(time.Hour)
+	snapshotStatus.LastSourceSnapshot = now.Add(-time.Hour)
+	if !sourceAheadOfArchive(whatsappdb.Source{ChatDB: chatDB, MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, snapshotStatus) {
+		t.Fatal("source snapshot watermark should cover changes before import completion")
+	}
+	if sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, MessageRowsKnown: true, NewestMessage: "not-time"}, status) {
 		t.Fatal("invalid source timestamp should not be ahead")
+	}
+	tombstoneOnly := status
+	tombstoneOnly.Messages = 0
+	tombstoneOnly.DeletedMessages = 3
+	if sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, tombstoneOnly) {
+		t.Fatal("tombstone-only archive should not be treated as uninitialized")
+	}
+	tombstoneOnly.NewestMessage = time.Time{}
+	tombstoneOnly.NewestObserved = now
+	if sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, tombstoneOnly) {
+		t.Fatal("tombstoned newest message should use the observed watermark")
+	}
+	recordedZero := status
+	recordedZero.LastSourceMessages = 0
+	recordedZero.SourceMessagesKnown = true
+	if !sourceAheadOfArchive(whatsappdb.Source{MessageRows: 3, MessageRowsKnown: true, NewestMessage: now.Format(time.RFC3339)}, recordedZero) {
+		t.Fatal("recorded zero source count should not fall back to archive totals")
 	}
 	if !sourceAheadOfArchive(whatsappdb.Source{}, store.Status{}) {
 		t.Fatal("empty archive should sync")
@@ -800,6 +966,8 @@ create table ZWAGROUPINFO (Z_PK integer primary key, ZCHATSESSION integer, ZOWNE
 create table ZWAGROUPMEMBER (Z_PK integer primary key, ZCHATSESSION integer, ZMEMBERJID varchar, ZCONTACTNAME varchar, ZFIRSTNAME varchar, ZISADMIN integer, ZISACTIVE integer);
 create table ZWAMEDIAITEM (Z_PK integer primary key, ZMESSAGE integer, ZMEDIALOCALPATH varchar, ZMEDIAURL varchar, ZTITLE varchar, ZVCARDNAME varchar, ZFILESIZE integer);
 create table ZWAMESSAGE (Z_PK integer primary key, ZCHATSESSION integer, ZGROUPMEMBER integer, ZMEDIAITEM integer, ZSTANZAID varchar, ZISFROMME integer, ZMESSAGEDATE timestamp, ZTEXT varchar, ZMESSAGETYPE integer, ZSTARRED integer, ZFROMJID varchar, ZTOJID varchar, ZPUSHNAME varchar);
+create table Z_METADATA (Z_VERSION integer primary key, Z_UUID varchar(255), Z_PLIST blob);
+insert into Z_METADATA values (1, 'cli-fixture-account', null);
 insert into ZWACHATSESSION values (1, '111@s.whatsapp.net', 'Bob', 700000020, 0, 0, 0, 0, 0);
 insert into ZWACHATSESSION values (2, '123@g.us', 'Launch Group', 700000010, 2, 0, 0, 0, 1);
 insert into ZWAGROUPINFO values (1, 2, 'owner@s.whatsapp.net', 699999000);
@@ -818,6 +986,15 @@ insert into ZWAMESSAGE values (3, 2, 1, 1, 'group-image', 0, 700000002, 'launch 
 create table ZWAADDRESSBOOKCONTACT (ZWHATSAPPID varchar, ZPHONENUMBER varchar, ZFULLNAME varchar, ZGIVENNAME varchar, ZLASTNAME varchar, ZBUSINESSNAME varchar, ZUSERNAME varchar, ZLID varchar, ZABOUTTEXT varchar, ZLASTUPDATED timestamp);
 insert into ZWAADDRESSBOOKCONTACT values ('111@s.whatsapp.net', '+111', 'Bob', 'Bob', '', '', '', '', '', 700000000);
 insert into ZWAADDRESSBOOKCONTACT values ('222@s.whatsapp.net', '+222', 'Alice Contact', 'Alice', '', '', '', '222', '', 700000000);
+`)
+	axolotl, err := sql.Open("sqlite", filepath.Join(dir, "Axolotl.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = axolotl.Close() }()
+	mustExec(t, axolotl, `
+create table ZWAZMDACCOUNT (Z_PK integer primary key, ZACCOUNTJIDSTRING varchar, ZUSERJIDSTRING varchar);
+insert into ZWAZMDACCOUNT values (1, 'cli-owner@s.whatsapp.net', 'cli-owner@s.whatsapp.net');
 `)
 	mediaPath := filepath.Join(dir, "Media", "123@g.us", "a", "test.jpg")
 	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o700); err != nil {

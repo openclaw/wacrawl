@@ -34,6 +34,8 @@ type Counts struct {
 	Groups       int `json:"groups"`
 	Participants int `json:"participants"`
 	Messages     int `json:"messages"`
+	Revisions    int `json:"message_revisions,omitempty"`
+	Identity     int `json:"archive_identity,omitempty"`
 	MediaFiles   int `json:"media_files,omitempty"`
 }
 
@@ -51,6 +53,11 @@ type Result struct {
 	MediaFiles int    `json:"media_files"`
 	Ref        string `json:"ref,omitempty"`
 	Tag        string `json:"tag,omitempty"`
+}
+
+type archiveIdentity struct {
+	SourceStoreIdentity string `json:"source_store_identity"`
+	AccountIdentity     string `json:"account_identity"`
 }
 
 func Init(ctx context.Context, opts Options) (Config, string, error) {
@@ -217,11 +224,17 @@ func Status(ctx context.Context, opts Options) (Manifest, string, error) {
 }
 
 func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, files []ckbackup.File, old Manifest) (Manifest, error) {
+	identities := []archiveIdentity(nil)
+	if data.SourceStoreIdentity != "" || data.AccountIdentity != "" {
+		identities = append(identities, archiveIdentity{SourceStoreIdentity: data.SourceStoreIdentity, AccountIdentity: data.AccountIdentity})
+	}
 	shards := []ckbackup.Shard{
 		{Table: "contacts", Path: "data/contacts.jsonl.gz.age", Rows: data.Contacts},
 		{Table: "chats", Path: "data/chats.jsonl.gz.age", Rows: data.Chats},
 		{Table: "groups", Path: "data/groups.jsonl.gz.age", Rows: data.Groups},
 		{Table: "group_participants", CountKey: "participants", Path: "data/group_participants.jsonl.gz.age", Rows: data.Participants},
+		{Table: "message_revisions", CountKey: "message_revisions", Path: "data/message_revisions.jsonl.gz.age", Rows: data.Revisions},
+		{Table: "archive_identity", CountKey: "archive_identity", Path: "data/archive_identity.jsonl.gz.age", Rows: identities},
 	}
 	for _, shard := range messageShards(data.Messages) {
 		shards = append(shards, ckbackup.Shard{Table: "messages", Path: shard.path, Rows: shard.messages})
@@ -239,6 +252,8 @@ func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, fil
 	manifest.Counts["groups"] = len(data.Groups)
 	manifest.Counts["participants"] = len(data.Participants)
 	manifest.Counts["messages"] = len(data.Messages)
+	manifest.Counts["message_revisions"] = len(data.Revisions)
+	manifest.Counts["archive_identity"] = len(identities)
 	if ckbackup.EquivalentManifest(toCrawlkitManifest(old), manifest) {
 		return old, nil
 	}
@@ -282,6 +297,22 @@ func decodeSnapshot(shards []ckbackup.DecodedShard) (store.SnapshotData, error) 
 				return store.SnapshotData{}, err
 			}
 			data.Messages = append(data.Messages, messages...)
+		case "message_revisions":
+			if err := ckbackup.DecodeJSONL(shard.Plaintext, &data.Revisions); err != nil {
+				return store.SnapshotData{}, err
+			}
+		case "archive_identity":
+			var identities []archiveIdentity
+			if err := ckbackup.DecodeJSONL(shard.Plaintext, &identities); err != nil {
+				return store.SnapshotData{}, err
+			}
+			if len(identities) > 1 {
+				return store.SnapshotData{}, errors.New("backup contains multiple archive identities")
+			}
+			if len(identities) == 1 {
+				data.SourceStoreIdentity = identities[0].SourceStoreIdentity
+				data.AccountIdentity = identities[0].AccountIdentity
+			}
 		default:
 			return store.SnapshotData{}, fmt.Errorf("unknown backup table %q", shard.Entry.Table)
 		}
@@ -350,11 +381,13 @@ func toCrawlkitManifest(manifest Manifest) ckbackup.Manifest {
 		Exported:   manifest.Exported,
 		Recipients: manifest.Recipients,
 		Counts: map[string]int{
-			"contacts":     manifest.Counts.Contacts,
-			"chats":        manifest.Counts.Chats,
-			"groups":       manifest.Counts.Groups,
-			"participants": manifest.Counts.Participants,
-			"messages":     manifest.Counts.Messages,
+			"contacts":          manifest.Counts.Contacts,
+			"chats":             manifest.Counts.Chats,
+			"groups":            manifest.Counts.Groups,
+			"participants":      manifest.Counts.Participants,
+			"messages":          manifest.Counts.Messages,
+			"message_revisions": manifest.Counts.Revisions,
+			"archive_identity":  manifest.Counts.Identity,
 		},
 		Shards: manifest.Shards,
 		Files:  manifest.Files,
@@ -377,6 +410,8 @@ func fromCrawlkitManifest(manifest ckbackup.Manifest) Manifest {
 			Groups:       manifest.Counts["groups"],
 			Participants: participants,
 			Messages:     manifest.Counts["messages"],
+			Revisions:    manifest.Counts["message_revisions"],
+			Identity:     manifest.Counts["archive_identity"],
 			MediaFiles:   len(manifest.Files),
 		},
 		Shards: manifest.Shards,

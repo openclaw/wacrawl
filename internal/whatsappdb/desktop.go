@@ -2,6 +2,7 @@ package whatsappdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -23,25 +24,29 @@ import (
 const (
 	chatDBName                  = "ChatStorage.sqlite"
 	contactsDBName              = "ContactsV2.sqlite"
+	axolotlDBName               = "Axolotl.sqlite"
+	axolotlBeforeDBName         = "Axolotl.before.sqlite"
 	appleEpoch                  = 978307200
 	maxJSONUnixSecond           = 253402300799
 	maxJSONAppleSecondExclusive = maxJSONUnixSecond - appleEpoch + 1
 )
 
 type Source struct {
-	Path          string   `json:"path"`
-	Available     bool     `json:"available"`
-	ChatDB        string   `json:"chat_db,omitempty"`
-	ContactsDB    string   `json:"contacts_db,omitempty"`
-	MediaDir      string   `json:"media_dir,omitempty"`
-	SupportingDBs []string `json:"supporting_dbs,omitempty"`
-	MessageRows   int      `json:"message_rows,omitempty"`
-	ChatRows      int      `json:"chat_rows,omitempty"`
-	ContactRows   int      `json:"contact_rows,omitempty"`
-	MediaRows     int      `json:"media_rows,omitempty"`
-	OldestMessage string   `json:"oldest_message,omitempty"`
-	NewestMessage string   `json:"newest_message,omitempty"`
-	SchemaNotes   []string `json:"schema_notes,omitempty"`
+	Path             string   `json:"path"`
+	Available        bool     `json:"available"`
+	ChatDB           string   `json:"chat_db,omitempty"`
+	ContactsDB       string   `json:"contacts_db,omitempty"`
+	MediaDir         string   `json:"media_dir,omitempty"`
+	SupportingDBs    []string `json:"supporting_dbs,omitempty"`
+	MessageRows      int      `json:"message_rows,omitempty"`
+	MessageRowsKnown bool     `json:"-"`
+	ChatRows         int      `json:"chat_rows,omitempty"`
+	ContactRows      int      `json:"contact_rows,omitempty"`
+	ContactRowsKnown bool     `json:"-"`
+	MediaRows        int      `json:"media_rows,omitempty"`
+	OldestMessage    string   `json:"oldest_message,omitempty"`
+	NewestMessage    string   `json:"newest_message,omitempty"`
+	SchemaNotes      []string `json:"schema_notes,omitempty"`
 }
 
 type Snapshot struct {
@@ -50,18 +55,22 @@ type Snapshot struct {
 }
 
 type Data struct {
-	Contacts     []store.Contact
-	Chats        []store.Chat
-	Groups       []store.Group
-	Participants []store.GroupParticipant
-	Messages     []store.Message
-	MediaCount   int
+	Contacts            []store.Contact
+	Chats               []store.Chat
+	Groups              []store.Group
+	Participants        []store.GroupParticipant
+	Messages            []store.Message
+	MediaCount          int
+	SourceStoreIdentity string
+	AccountIdentity     string
 }
 
 type ImportOptions struct {
-	SourcePath string
-	CopyMedia  bool
-	MediaRoot  string
+	SourcePath  string
+	CopyMedia   bool
+	MediaRoot   string
+	Restore     bool
+	AdoptSource bool
 }
 
 func DefaultPath() string {
@@ -107,7 +116,9 @@ func Discover(ctx context.Context, path string) (Source, error) {
 	chatDB, closeChat, err := openReadOnly(source.ChatDB)
 	if err == nil {
 		defer closeChat()
-		_ = chatDB.QueryRowContext(ctx, "select count(*) from ZWAMESSAGE").Scan(&source.MessageRows)
+		if err := chatDB.QueryRowContext(ctx, "select count(*) from ZWAMESSAGE").Scan(&source.MessageRows); err == nil {
+			source.MessageRowsKnown = true
+		}
 		_ = chatDB.QueryRowContext(ctx, "select count(*) from ZWACHATSESSION").Scan(&source.ChatRows)
 		_ = chatDB.QueryRowContext(ctx, "select count(*) from ZWAMEDIAITEM").Scan(&source.MediaRows)
 		var minDate, maxDate sql.NullFloat64
@@ -129,7 +140,9 @@ func Discover(ctx context.Context, path string) (Source, error) {
 	contactsDB, closeContacts, err := openReadOnly(source.ContactsDB)
 	if err == nil {
 		defer closeContacts()
-		_ = contactsDB.QueryRowContext(ctx, "select count(*) from ZWAADDRESSBOOKCONTACT").Scan(&source.ContactRows)
+		if err := contactsDB.QueryRowContext(ctx, "select count(*) from ZWAADDRESSBOOKCONTACT").Scan(&source.ContactRows); err == nil {
+			source.ContactRowsKnown = true
+		}
 	}
 	return source, nil
 }
@@ -143,11 +156,19 @@ func SnapshotPath(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if _, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, axolotlDBName), DestinationDir: root, Name: axolotlBeforeDBName}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.RemoveAll(root)
+		return Snapshot{}, err
+	}
 	if _, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, chatDBName), DestinationDir: root, Name: chatDBName}); err != nil {
 		_ = os.RemoveAll(root)
 		return Snapshot{}, err
 	}
 	if _, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, contactsDBName), DestinationDir: root, Name: contactsDBName}); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.RemoveAll(root)
+		return Snapshot{}, err
+	}
+	if _, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, axolotlDBName), DestinationDir: root, Name: axolotlDBName}); err != nil && !errors.Is(err, os.ErrNotExist) {
 		_ = os.RemoveAll(root)
 		return Snapshot{}, err
 	}
@@ -163,7 +184,148 @@ func Extract(ctx context.Context, snap Snapshot) (Data, error) {
 	if err != nil {
 		return Data{}, err
 	}
-	return Data{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, MediaCount: mediaCount}, nil
+	sourceStoreIdentity, err := readSourceIdentity(ctx, filepath.Join(snap.Root, chatDBName))
+	if err != nil {
+		return Data{}, err
+	}
+	accountIdentity, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlDBName))
+	if err != nil {
+		return Data{}, err
+	}
+	accountIdentityBefore, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlBeforeDBName))
+	if err != nil {
+		return Data{}, err
+	}
+	if accountIdentity != accountIdentityBefore {
+		return Data{}, errors.New("WhatsApp account changed while the Desktop snapshot was being captured; retry the import")
+	}
+	return Data{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, MediaCount: mediaCount, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity}, nil
+}
+
+func readSourceIdentity(ctx context.Context, chatDBPath string) (string, error) {
+	db, closeDB, err := openReadOnly(chatDBPath)
+	if err != nil {
+		return "", err
+	}
+	defer closeDB()
+	var metadataTables int
+	if err := db.QueryRowContext(ctx, `select count(*) from sqlite_master where type='table' and name='Z_METADATA'`).Scan(&metadataTables); err != nil {
+		return "", err
+	}
+	if metadataTables == 0 {
+		return "", nil
+	}
+	var storeUUID string
+	if err := db.QueryRowContext(ctx, `select coalesce(Z_UUID,'') from Z_METADATA limit 1`).Scan(&storeUUID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read WhatsApp store identity: %w", err)
+	}
+	storeUUID = strings.TrimSpace(storeUUID)
+	if storeUUID == "" {
+		return "", nil
+	}
+	fingerprint := sha256.Sum256([]byte("chat-store\x00" + storeUUID))
+	return fmt.Sprintf("wa-store:%x", fingerprint), nil
+}
+
+func readAccountIdentity(ctx context.Context, axolotlDBPath string) (string, error) {
+	if _, err := os.Stat(axolotlDBPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	db, closeDB, err := openReadOnly(axolotlDBPath)
+	if err != nil {
+		return "", err
+	}
+	defer closeDB()
+
+	preferred, err := accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZUSERJIDSTRING")
+	if err != nil {
+		return "", err
+	}
+	if len(preferred) > 0 {
+		return accountFingerprint(preferred)
+	}
+	preferred, err = accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZACCOUNTJIDSTRING")
+	if err != nil {
+		return "", err
+	}
+	if len(preferred) > 0 {
+		return accountFingerprint(preferred)
+	}
+	fallback := make(map[string]struct{})
+	for _, table := range []string{"ZWAAXOLOTLIDENTITY", "ZWAAXOLOTLSESSION", "ZWASENDERKEY"} {
+		ids, err := accountIDs(ctx, db, table, "ZACCOUNTJIDSTRING")
+		if err != nil {
+			return "", err
+		}
+		for id := range ids {
+			fallback[id] = struct{}{}
+		}
+	}
+	return accountFingerprint(fallback)
+}
+
+func accountIDs(ctx context.Context, db *sql.DB, table string, columns ...string) (map[string]struct{}, error) {
+	ids := make(map[string]struct{})
+	var tables int
+	if err := db.QueryRowContext(ctx, `select count(*) from sqlite_master where type='table' and name=?`, table).Scan(&tables); err != nil {
+		return nil, err
+	}
+	if tables == 0 {
+		return ids, nil
+	}
+	for _, column := range columns {
+		var present int
+		if err := db.QueryRowContext(ctx, `select count(*) from pragma_table_info(?) where name=?`, table, column).Scan(&present); err != nil {
+			return nil, err
+		}
+		if present == 0 {
+			continue
+		}
+		query := fmt.Sprintf("select coalesce(%s,'') from %s", column, table) //nolint:gosec // names come from fixed internal lists.
+		if err := collectAccountIDs(ctx, db, query, ids); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+func collectAccountIDs(ctx context.Context, db *sql.DB, query string, ids map[string]struct{}) error {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		id = strings.ToLower(strings.TrimSpace(id))
+		if id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return rows.Err()
+}
+
+func accountFingerprint(ids map[string]struct{}) (string, error) {
+	if len(ids) == 0 {
+		return "", nil
+	}
+	if len(ids) != 1 {
+		return "", errors.New("source contains multiple WhatsApp account identities and cannot be imported safely")
+	}
+	var id string
+	for id = range ids {
+	}
+	fingerprint := sha256.Sum256([]byte("account-jid\x00" + id))
+	return fmt.Sprintf("wa-account:%x", fingerprint), nil
 }
 
 func Import(ctx context.Context, st *store.Store, path string) (store.ImportStats, error) {
@@ -172,7 +334,12 @@ func Import(ctx context.Context, st *store.Store, path string) (store.ImportStat
 
 func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions) (store.ImportStats, error) {
 	sourcePath := defaultedPath(opts.SourcePath)
-	stats := store.ImportStats{SourcePath: sourcePath, DBPath: st.Path(), StartedAt: time.Now().UTC()}
+	sourceIdentity, err := canonicalSourcePath(sourcePath)
+	if err != nil {
+		return store.ImportStats{}, err
+	}
+	stats := store.ImportStats{SourcePath: sourcePath, SourceIdentity: sourceIdentity, AdoptSource: opts.AdoptSource, DBPath: st.Path(), StartedAt: time.Now().UTC()}
+	stats.SourceSnapshotAt = stats.StartedAt
 	snap, err := SnapshotPath(sourcePath)
 	if err != nil {
 		return stats, err
@@ -180,6 +347,27 @@ func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions)
 	defer func() { _ = os.RemoveAll(snap.Root) }()
 	data, err := Extract(ctx, snap)
 	if err != nil {
+		return stats, err
+	}
+	stats.SourceStoreIdentity = data.SourceStoreIdentity
+	stats.AccountIdentity = data.AccountIdentity
+	stats.Chats = len(data.Chats)
+	stats.Contacts = len(data.Contacts)
+	stats.Groups = len(data.Groups)
+	stats.Participants = len(data.Participants)
+	stats.Messages = len(data.Messages)
+	for _, message := range data.Messages {
+		if message.Timestamp.After(stats.SourceNewestMessage) {
+			stats.SourceNewestMessage = message.Timestamp
+		}
+	}
+	stats.MediaMessages = data.MediaCount
+	stats.FinishedAt = time.Now().UTC()
+	stats.Mode = "merge"
+	if opts.Restore {
+		stats.Mode = "restore"
+	}
+	if err := st.ValidateImport(ctx, stats, data.Messages, opts.Restore); err != nil {
 		return stats, err
 	}
 	if opts.CopyMedia {
@@ -194,17 +382,28 @@ func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions)
 		stats.MediaCopied = copied
 		stats.MediaMissing = missing
 	}
-	stats.Chats = len(data.Chats)
-	stats.Contacts = len(data.Contacts)
-	stats.Groups = len(data.Groups)
-	stats.Participants = len(data.Participants)
-	stats.Messages = len(data.Messages)
-	stats.MediaMessages = data.MediaCount
-	stats.FinishedAt = time.Now().UTC()
-	if err := st.ReplaceAll(ctx, stats, data.Contacts, data.Chats, data.Groups, data.Participants, data.Messages); err != nil {
+	importArchive := st.MergeAll
+	if opts.Restore {
+		importArchive = st.ReplaceAll
+	}
+	if err := importArchive(ctx, stats, data.Contacts, data.Chats, data.Groups, data.Participants, data.Messages); err != nil {
 		return stats, err
 	}
 	return stats, nil
+}
+
+func canonicalSourcePath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve desktop path: %w", err)
+	}
+	if evaluated, err := filepath.EvalSymlinks(absolute); err == nil {
+		absolute = evaluated
+	}
+	return filepath.Clean(absolute), nil
 }
 
 func copyArchiveMedia(messages []store.Message, sourceRoot, mediaRoot string) (int, int, error) {
@@ -550,7 +749,7 @@ func mergeParticipantRows(existing, candidate store.GroupParticipant) store.Grou
 func readMessageRows(ctx context.Context, db *sql.DB, sourceRoot string, names map[string]string) ([]store.Message, int, error) {
 	rows, err := db.QueryContext(ctx, `
 select m.Z_PK, coalesce(c.ZCONTACTJID,''), coalesce(c.ZPARTNERNAME,''), coalesce(m.ZSTANZAID,''), coalesce(m.ZISFROMME,0), m.ZMESSAGEDATE,
-       coalesce(m.ZTEXT,''), coalesce(m.ZMESSAGETYPE,0), coalesce(m.ZSTARRED,0), coalesce(m.ZFROMJID,''), coalesce(m.ZTOJID,''), coalesce(m.ZPUSHNAME,''),
+       m.ZTEXT, coalesce(m.ZMESSAGETYPE,0), coalesce(m.ZSTARRED,0), coalesce(m.ZFROMJID,''), coalesce(m.ZTOJID,''), coalesce(m.ZPUSHNAME,''),
        coalesce(gm.ZMEMBERJID,''), coalesce(gm.ZCONTACTNAME,''), coalesce(gm.ZFIRSTNAME,''),
        coalesce(mi.ZMEDIALOCALPATH,''), coalesce(mi.ZMEDIAURL,''), coalesce(mi.ZTITLE,''), coalesce(mi.ZVCARDNAME,''), coalesce(mi.ZFILESIZE,0)
 from ZWAMESSAGE m
@@ -567,15 +766,18 @@ order by m.ZMESSAGEDATE asc, m.Z_PK asc`)
 	for rows.Next() {
 		var m store.Message
 		var msgDate sql.NullFloat64
+		var text sql.NullString
 		var fromMe, starred int
 		var fromJID, toJID, pushName, memberJID, memberName, memberFirst, mediaPath, mediaURL, mediaTitle, vcardName string
-		if err := rows.Scan(&m.SourcePK, &m.ChatJID, &m.ChatName, &m.MessageID, &fromMe, &msgDate, &m.Text, &m.RawType, &starred, &fromJID, &toJID, &pushName, &memberJID, &memberName, &memberFirst, &mediaPath, &mediaURL, &mediaTitle, &vcardName, &m.MediaSize); err != nil {
+		if err := rows.Scan(&m.SourcePK, &m.ChatJID, &m.ChatName, &m.MessageID, &fromMe, &msgDate, &text, &m.RawType, &starred, &fromJID, &toJID, &pushName, &memberJID, &memberName, &memberFirst, &mediaPath, &mediaURL, &mediaTitle, &vcardName, &m.MediaSize); err != nil {
 			return nil, 0, err
 		}
 		if m.ChatJID == "" || m.MessageID == "" {
 			continue
 		}
 		m.Timestamp = appleNullTime(msgDate)
+		m.Text = text.String
+		m.SourceTextNull = !text.Valid
 		m.FromMe = fromMe != 0
 		m.Starred = starred != 0
 		m.MessageType = messageType(m.RawType)

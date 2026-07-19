@@ -2,19 +2,24 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openclaw/wacrawl/internal/store/storedb"
 )
 
 type SnapshotData struct {
-	Contacts     []Contact
-	Chats        []Chat
-	Groups       []Group
-	Participants []GroupParticipant
-	Messages     []Message
-	Revisions    []MessageRevision
+	Contacts            []Contact
+	Chats               []Chat
+	Groups              []Group
+	Participants        []GroupParticipant
+	Messages            []Message
+	Revisions           []MessageRevision
+	SourceStoreIdentity string `json:"source_store_identity,omitempty"`
+	AccountIdentity     string `json:"account_identity,omitempty"`
 }
 
 func (d SnapshotData) ImportStats(sourcePath, dbPath string, finishedAt time.Time) ImportStats {
@@ -28,16 +33,18 @@ func (d SnapshotData) ImportStats(sourcePath, dbPath string, finishedAt time.Tim
 		}
 	}
 	return ImportStats{
-		SourcePath:    sourcePath,
-		DBPath:        dbPath,
-		Chats:         len(d.Chats),
-		Contacts:      len(d.Contacts),
-		Groups:        len(d.Groups),
-		Participants:  len(d.Participants),
-		Messages:      len(d.Messages),
-		MediaMessages: mediaMessages,
-		StartedAt:     finishedAt,
-		FinishedAt:    finishedAt,
+		SourcePath:          sourcePath,
+		SourceStoreIdentity: d.SourceStoreIdentity,
+		AccountIdentity:     d.AccountIdentity,
+		DBPath:              dbPath,
+		Chats:               len(d.Chats),
+		Contacts:            len(d.Contacts),
+		Groups:              len(d.Groups),
+		Participants:        len(d.Participants),
+		Messages:            len(d.Messages),
+		MediaMessages:       mediaMessages,
+		StartedAt:           finishedAt,
+		FinishedAt:          finishedAt,
 	}
 }
 
@@ -66,7 +73,30 @@ func (s *Store) ExportAll(ctx context.Context) (SnapshotData, error) {
 	if err != nil {
 		return SnapshotData{}, err
 	}
-	return SnapshotData{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, Revisions: revisions}, nil
+	sourceStoreIdentity, err := s.syncStateValue(ctx, "merge_source_store_identity")
+	if err != nil {
+		return SnapshotData{}, err
+	}
+	accountIdentity, err := s.syncStateValue(ctx, "merge_account_identity")
+	if err != nil {
+		return SnapshotData{}, err
+	}
+	if strings.HasPrefix(accountIdentity, "wa-store:") {
+		if sourceStoreIdentity == "" {
+			sourceStoreIdentity = accountIdentity
+		}
+		accountIdentity = ""
+	}
+	return SnapshotData{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, Revisions: revisions, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity}, nil
+}
+
+func (s *Store) syncStateValue(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.db.QueryRowContext(ctx, `select value from sync_state where key=?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
 }
 
 func (s *Store) Contacts(ctx context.Context) ([]Contact, error) {
@@ -157,6 +187,12 @@ func (s *Store) exportParticipants(ctx context.Context) ([]GroupParticipant, err
 }
 
 func (d SnapshotData) Validate() error {
+	if d.AccountIdentity != "" && !strings.HasPrefix(d.AccountIdentity, "wa-account:") {
+		return errors.New("invalid WhatsApp account identity")
+	}
+	if d.SourceStoreIdentity != "" && !strings.HasPrefix(d.SourceStoreIdentity, "wa-store:") {
+		return errors.New("invalid WhatsApp source-store identity")
+	}
 	seen := map[int64]struct{}{}
 	events := map[string]struct{}{}
 	for _, message := range d.Messages {
