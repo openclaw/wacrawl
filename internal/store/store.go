@@ -3,10 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,11 +19,11 @@ import (
 )
 
 const (
-	schemaVersion     = 1
+	schemaVersion     = 2
 	maxJSONUnixSecond = 253402300799 // 9999-12-31T23:59:59Z, the largest time.Time JSON can marshal.
 
-	messageSelectColumns = `source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, '' as snippet`
-	messageScanColumns   = `source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, snippet`
+	messageSelectColumns = `source_pk, event_id, chat_jid, coalesce(chat_name,'') as chat_name, msg_id, coalesce(sender_jid,'') as sender_jid, coalesce(sender_name,'') as sender_name, ts, from_me, coalesce(text,'') as text, raw_type, coalesce(message_type,'') as message_type, coalesce(media_type,'') as media_type, coalesce(media_title,'') as media_title, coalesce(media_path,'') as media_path, coalesce(media_url,'') as media_url, coalesce(media_size,0) as media_size, starred, coalesce(deleted_at,0) as deleted_at, coalesce(deletion_source,'') as deletion_source, coalesce(deletion_reason,'') as deletion_reason, last_seen_at, '' as snippet`
+	messageScanColumns   = `source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, deleted_at, deletion_source, deletion_reason, last_seen_at, snippet`
 )
 
 type Store struct {
@@ -31,37 +33,61 @@ type Store struct {
 }
 
 type ImportStats struct {
-	SourcePath    string    `json:"source_path"`
-	DBPath        string    `json:"db_path"`
-	Chats         int       `json:"chats"`
-	Contacts      int       `json:"contacts"`
-	Groups        int       `json:"groups"`
-	Participants  int       `json:"participants"`
-	Messages      int       `json:"messages"`
-	MediaMessages int       `json:"media_messages"`
-	MediaCopied   int       `json:"media_copied,omitempty"`
-	MediaMissing  int       `json:"media_missing,omitempty"`
-	StartedAt     time.Time `json:"started_at"`
-	FinishedAt    time.Time `json:"finished_at"`
+	Mode                string    `json:"mode"`
+	SourceIdentity      string    `json:"-"`
+	AccountIdentity     string    `json:"-"`
+	SourceNewestMessage time.Time `json:"-"`
+	SourcePath          string    `json:"source_path"`
+	DBPath              string    `json:"db_path"`
+	Chats               int       `json:"chats"`
+	Contacts            int       `json:"contacts"`
+	Groups              int       `json:"groups"`
+	Participants        int       `json:"participants"`
+	Messages            int       `json:"messages"`
+	MediaMessages       int       `json:"media_messages"`
+	MediaCopied         int       `json:"media_copied,omitempty"`
+	MediaMissing        int       `json:"media_missing,omitempty"`
+	StartedAt           time.Time `json:"started_at"`
+	FinishedAt          time.Time `json:"finished_at"`
 }
 
 type Status struct {
-	DBPath         string    `json:"db_path"`
-	Chats          int       `json:"chats"`
-	UnreadChats    int       `json:"unread_chats"`
-	UnreadMessages int       `json:"unread_messages"`
-	Contacts       int       `json:"contacts"`
-	Groups         int       `json:"groups"`
-	Participants   int       `json:"participants"`
-	Messages       int       `json:"messages"`
-	MediaMessages  int       `json:"media_messages"`
-	OldestMessage  time.Time `json:"oldest_message,omitzero"`
-	NewestMessage  time.Time `json:"newest_message,omitzero"`
-	LastImportAt   time.Time `json:"last_import_at,omitzero"`
-	LastSource     string    `json:"last_source,omitempty"`
+	DBPath              string    `json:"db_path"`
+	Chats               int       `json:"chats"`
+	UnreadChats         int       `json:"unread_chats"`
+	UnreadMessages      int       `json:"unread_messages"`
+	Contacts            int       `json:"contacts"`
+	Groups              int       `json:"groups"`
+	Participants        int       `json:"participants"`
+	Messages            int       `json:"messages"`
+	MediaMessages       int       `json:"media_messages"`
+	DeletedChats        int       `json:"deleted_chats"`
+	DeletedContacts     int       `json:"deleted_contacts"`
+	DeletedGroups       int       `json:"deleted_groups"`
+	DeletedParticipants int       `json:"deleted_participants"`
+	DeletedMessages     int       `json:"deleted_messages"`
+	MessageRevisions    int       `json:"message_revisions"`
+	OldestMessage       time.Time `json:"oldest_message,omitzero"`
+	NewestMessage       time.Time `json:"newest_message,omitzero"`
+	LastImportAt        time.Time `json:"last_import_at,omitzero"`
+	LastSource          string    `json:"last_source,omitempty"`
+	LastSourceMessages  int       `json:"last_source_messages,omitempty"`
+	LastSourceContacts  int       `json:"last_source_contacts,omitempty"`
+	SourceMessagesKnown bool      `json:"-"`
+	SourceContactsKnown bool      `json:"-"`
+	LastSourceNewest    time.Time `json:"-"`
+	NewestObserved      time.Time `json:"-"`
+}
+
+type Tombstone struct {
+	DeletedAt      time.Time `json:"deleted_at,omitzero"`
+	DeletionSource string    `json:"deletion_source,omitempty"`
+	DeletionReason string    `json:"deletion_reason,omitempty"`
+	LastSeenAt     time.Time `json:"last_seen_at,omitzero"`
 }
 
 type Chat struct {
+	Tombstone
 	JID            string
 	Kind           string
 	Name           string
@@ -80,6 +106,7 @@ type ChatFilter struct {
 }
 
 type Contact struct {
+	Tombstone
 	JID          string
 	Phone        string
 	FullName     string
@@ -93,6 +120,7 @@ type Contact struct {
 }
 
 type Group struct {
+	Tombstone
 	JID       string
 	Name      string
 	OwnerJID  string
@@ -100,6 +128,7 @@ type Group struct {
 }
 
 type GroupParticipant struct {
+	Tombstone
 	GroupJID    string
 	UserJID     string
 	ContactName string
@@ -109,24 +138,36 @@ type GroupParticipant struct {
 }
 
 type Message struct {
-	SourcePK    int64     `json:"source_pk"`
-	ChatJID     string    `json:"chat_jid"`
-	ChatName    string    `json:"chat_name,omitempty"`
-	MessageID   string    `json:"message_id"`
-	SenderJID   string    `json:"sender_jid,omitempty"`
-	SenderName  string    `json:"sender_name,omitempty"`
-	Timestamp   time.Time `json:"timestamp"`
-	FromMe      bool      `json:"from_me"`
-	Text        string    `json:"text,omitempty"`
-	RawType     int       `json:"raw_type"`
-	MessageType string    `json:"message_type,omitempty"`
-	MediaType   string    `json:"media_type,omitempty"`
-	MediaTitle  string    `json:"media_title,omitempty"`
-	MediaPath   string    `json:"media_path,omitempty"`
-	MediaURL    string    `json:"media_url,omitempty"`
-	MediaSize   int64     `json:"media_size,omitempty"`
-	Starred     bool      `json:"starred,omitempty"`
-	Snippet     string    `json:"snippet,omitempty"`
+	Tombstone
+	SourcePK       int64     `json:"source_pk"`
+	EventID        string    `json:"event_id"`
+	ChatJID        string    `json:"chat_jid"`
+	ChatName       string    `json:"chat_name,omitempty"`
+	MessageID      string    `json:"message_id"`
+	SenderJID      string    `json:"sender_jid,omitempty"`
+	SenderName     string    `json:"sender_name,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+	FromMe         bool      `json:"from_me"`
+	Text           string    `json:"text,omitempty"`
+	RawType        int       `json:"raw_type"`
+	MessageType    string    `json:"message_type,omitempty"`
+	MediaType      string    `json:"media_type,omitempty"`
+	MediaTitle     string    `json:"media_title,omitempty"`
+	MediaPath      string    `json:"media_path,omitempty"`
+	MediaURL       string    `json:"media_url,omitempty"`
+	MediaSize      int64     `json:"media_size,omitempty"`
+	Starred        bool      `json:"starred,omitempty"`
+	Snippet        string    `json:"snippet,omitempty"`
+	SourceTextNull bool      `json:"-"`
+	storedUnix     int64
+}
+
+type MessageRevision struct {
+	EventID     string    `json:"event_id"`
+	PayloadJSON string    `json:"payload_json"`
+	RecordedAt  time.Time `json:"recorded_at"`
+	EventSource string    `json:"event_source"`
+	Reason      string    `json:"reason"`
 }
 
 type MessageFilter struct {
