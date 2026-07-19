@@ -18,56 +18,86 @@ type Chat struct {
 	Removed        int64
 	Hidden         int64
 	RawSessionType int64
+	DeletedAt      sql.NullInt64
+	DeletionSource sql.NullString
+	DeletionReason sql.NullString
+	LastSeenAt     int64
 }
 
 type Contact struct {
-	Jid          string
-	Phone        sql.NullString
-	FullName     sql.NullString
-	FirstName    sql.NullString
-	LastName     sql.NullString
-	BusinessName sql.NullString
-	Username     sql.NullString
-	Lid          sql.NullString
-	AboutText    sql.NullString
-	UpdatedAt    sql.NullInt64
+	Jid            string
+	Phone          sql.NullString
+	FullName       sql.NullString
+	FirstName      sql.NullString
+	LastName       sql.NullString
+	BusinessName   sql.NullString
+	Username       sql.NullString
+	Lid            sql.NullString
+	AboutText      sql.NullString
+	UpdatedAt      sql.NullInt64
+	DeletedAt      sql.NullInt64
+	DeletionSource sql.NullString
+	DeletionReason sql.NullString
+	LastSeenAt     int64
 }
 
 type Group struct {
-	Jid       string
-	Name      sql.NullString
-	OwnerJid  sql.NullString
-	CreatedAt sql.NullInt64
+	Jid            string
+	Name           sql.NullString
+	OwnerJid       sql.NullString
+	CreatedAt      sql.NullInt64
+	DeletedAt      sql.NullInt64
+	DeletionSource sql.NullString
+	DeletionReason sql.NullString
+	LastSeenAt     int64
 }
 
 type GroupParticipant struct {
-	GroupJid    string
-	UserJid     string
-	ContactName sql.NullString
-	FirstName   sql.NullString
-	IsAdmin     int64
-	IsActive    int64
+	GroupJid       string
+	UserJid        string
+	ContactName    sql.NullString
+	FirstName      sql.NullString
+	IsAdmin        int64
+	IsActive       int64
+	DeletedAt      sql.NullInt64
+	DeletionSource sql.NullString
+	DeletionReason sql.NullString
+	LastSeenAt     int64
 }
 
 type Message struct {
-	Rowid       int64
-	SourcePk    int64
-	ChatJid     string
-	ChatName    sql.NullString
-	MsgID       string
-	SenderJid   sql.NullString
-	SenderName  sql.NullString
-	Ts          int64
-	FromMe      int64
-	Text        sql.NullString
-	RawType     int64
-	MessageType sql.NullString
-	MediaType   sql.NullString
-	MediaTitle  sql.NullString
-	MediaPath   sql.NullString
-	MediaUrl    sql.NullString
-	MediaSize   sql.NullInt64
-	Starred     int64
+	Rowid          int64
+	SourcePk       int64
+	EventID        string
+	ChatJid        string
+	ChatName       sql.NullString
+	MsgID          string
+	SenderJid      sql.NullString
+	SenderName     sql.NullString
+	Ts             int64
+	FromMe         int64
+	Text           sql.NullString
+	RawType        int64
+	MessageType    sql.NullString
+	MediaType      sql.NullString
+	MediaTitle     sql.NullString
+	MediaPath      sql.NullString
+	MediaUrl       sql.NullString
+	MediaSize      sql.NullInt64
+	Starred        int64
+	DeletedAt      sql.NullInt64
+	DeletionSource sql.NullString
+	DeletionReason sql.NullString
+	LastSeenAt     int64
+}
+
+type MessageRevision struct {
+	ID          int64
+	EventID     string
+	PayloadJson string
+	RecordedAt  int64
+	EventSource string
+	Reason      string
 }
 
 type MessagesFt struct {

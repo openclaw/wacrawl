@@ -10,7 +10,11 @@ create table chats (
 	archived integer not null default 0,
 	removed integer not null default 0,
 	hidden integer not null default 0,
-	raw_session_type integer not null default 0
+	raw_session_type integer not null default 0,
+	deleted_at integer,
+	deletion_source text,
+	deletion_reason text,
+	last_seen_at integer not null default 0
 );
 
 create table contacts (
@@ -23,14 +27,22 @@ create table contacts (
 	username text,
 	lid text,
 	about_text text,
-	updated_at integer
+	updated_at integer,
+	deleted_at integer,
+	deletion_source text,
+	deletion_reason text,
+	last_seen_at integer not null default 0
 );
 
 create table groups (
 	jid text primary key,
 	name text,
 	owner_jid text,
-	created_at integer
+	created_at integer,
+	deleted_at integer,
+	deletion_source text,
+	deletion_reason text,
+	last_seen_at integer not null default 0
 );
 
 create table group_participants (
@@ -40,12 +52,17 @@ create table group_participants (
 	first_name text,
 	is_admin integer not null default 0,
 	is_active integer not null default 0,
+	deleted_at integer,
+	deletion_source text,
+	deletion_reason text,
+	last_seen_at integer not null default 0,
 	primary key (group_jid, user_jid)
 );
 
 create table messages (
 	rowid integer primary key autoincrement,
 	source_pk integer not null unique,
+	event_id text not null,
 	chat_jid text not null,
 	chat_name text,
 	msg_id text not null,
@@ -61,7 +78,11 @@ create table messages (
 	media_path text,
 	media_url text,
 	media_size integer,
-	starred integer not null default 0
+	starred integer not null default 0,
+	deleted_at integer,
+	deletion_source text,
+	deletion_reason text,
+	last_seen_at integer not null default 0
 );
 
 create index idx_messages_chat_ts on messages(chat_jid, ts);
@@ -78,6 +99,17 @@ create table messages_fts (
 	sender text,
 	media text
 );
+
+create table message_revisions (
+	id integer primary key autoincrement,
+	event_id text not null,
+	payload_json text not null,
+	recorded_at integer not null,
+	event_source text not null,
+	reason text not null
+);
+
+create index idx_message_revisions_event on message_revisions(event_id, recorded_at desc, id desc);
 
 create table sync_state (
 	key text primary key,
