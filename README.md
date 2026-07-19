@@ -145,11 +145,13 @@ range, and importer schema notes.
 
 ### `import`
 
-Snapshot WhatsApp Desktop data and replace the local archive in one transaction:
+Snapshot WhatsApp Desktop data and merge it into the local archive in one
+transaction:
 
 ```bash
 wacrawl import
 wacrawl import --copy-media
+wacrawl import --restore
 ```
 
 `sync` is the same command with a clearer name:
@@ -158,6 +160,33 @@ wacrawl import --copy-media
 wacrawl sync
 wacrawl sync --copy-media
 ```
+
+Routine imports merge by stable row identity. Rows absent from the current
+Desktop snapshot remain in the archive because absence is not a deletion
+signal. This preserves older history after WhatsApp evicts it from local
+storage. The archive binds both the canonical Desktop path and a hashed,
+portable CoreData store marker. That marker identifies the store, not the
+WhatsApp account inside it; the importer separately hashes the account-owned
+JID in `Axolotl.sqlite`. A nonempty archive without that verified account
+binding refuses routine merges, even when events overlap. Use a one-time
+`--adopt-source` to bind a legacy archive that has no verified account binding
+while retaining its rows. Established account and store fingerprints remain
+strict across encrypted backup restore.
+Replacing or repopulating the same store with a different account therefore
+cannot silently combine histories. Pass `--restore` only when the archive must
+exactly match the current snapshot or intentionally switch sources; exact
+restore removes destination-only rows and local revision history.
+
+Explicit WhatsApp signals create source-attributed tombstones instead of
+deleting rows. Removed chats tombstone their archived groups, participants,
+and messages; inactive group members are tombstoned; and an observed plain-text
+message payload changing to SQL `NULL` is retained as a deleted message with
+its previous payload in `message_revisions`. Message tombstones are sticky during
+merge imports; an exact `--restore` is authoritative if a source replacement
+must revive one. A removed chat can begin a new live lifecycle when WhatsApp
+reports post-tombstone activity, without reviving its historical messages.
+Normal list, search, status, and web reads exclude tombstones, while encrypted
+backups retain them.
 
 Imports:
 
@@ -181,8 +210,8 @@ Show archive counts and import metadata:
 wacrawl status
 ```
 
-Includes chat, unread-chat, unread-message, contact, group, participant,
-message, media-message, oldest, newest, last-import, and source fields.
+Includes live and deleted entity counts, message revision count, unread counts,
+media-message count, oldest, newest, last-import, and source fields.
 
 By default, `status` first syncs the archive when the last sync is older than
 `--sync-max-age` and the WhatsApp Desktop source has newer data.
@@ -345,6 +374,7 @@ data/contacts.jsonl.gz.age
 data/groups.jsonl.gz.age
 data/group_participants.jsonl.gz.age
 data/messages/YYYY/MM.jsonl.gz.age
+data/message_revisions.jsonl.gz.age
 data/files/index*.jsonl.gz.age
 data/files/objects/OPAQUE_ID.gz.age
 ```
@@ -675,6 +705,8 @@ Import/sync flags:
 
 ```text
 --copy-media            Copy referenced media during import/sync.
+--adopt-source          Bind an unverified archive to this account and merge.
+--restore               Exactly replace archive rows instead of merging.
 ```
 
 ## Data Format Notes
@@ -688,13 +720,26 @@ ZWAMESSAGE
 ZWAMEDIAITEM
 ZWAGROUPINFO
 ZWAGROUPMEMBER
+Axolotl.sqlite: ZWAZMDACCOUNT (account identity only)
 ```
 
 Important details:
 
 - WhatsApp timestamps are seconds since `2001-01-01T00:00:00Z`.
-- `ZWAMESSAGE.Z_PK` is used as the source row identity.
+- `ZWAMESSAGE.Z_PK` is the stable source row identity inside each separate
+  account archive and maps to `messages.event_id` as `wa:<source_pk>`.
+  Routine merges bind the archive to one canonical Desktop source path and a
+  hashed CoreData store fingerprint, then reject source changes and conflicting
+  event envelopes. A separate hashed account JID is the privacy boundary; event
+  overlap never substitutes for it. Existing archives without that binding
+  require a one-time explicit `--adopt-source`. Use a separate `--db`
+  for another account or `--restore` for an intentional source replacement.
 - `ZSTANZAID` is not unique enough for archive identity.
+- Every canonical entity carries `deleted_at`, `deletion_source`,
+  `deletion_reason`, and `last_seen_at`; an unobserved row is never implicitly
+  tombstoned.
+- Prior observable message payloads are append-only rows in
+  `message_revisions` keyed by stable `event_id`.
 - Group senders are resolved through `ZWAMESSAGE.ZGROUPMEMBER`.
 - Media is joined through both `ZWAMESSAGE.ZMEDIAITEM` and
   `ZWAMEDIAITEM.ZMESSAGE`.

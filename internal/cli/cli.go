@@ -189,6 +189,8 @@ func (a *app) runImport(ctx context.Context, command string, args []string) erro
 	fs.SetOutput(io.Discard)
 	source := fs.String("source", a.source, "")
 	copyMedia := fs.Bool("copy-media", false, "")
+	restore := fs.Bool("restore", false, "")
+	adoptSource := fs.Bool("adopt-source", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printCommandUsage(a.stdout, command)
@@ -199,8 +201,11 @@ func (a *app) runImport(ctx context.Context, command string, args []string) erro
 	if fs.NArg() != 0 {
 		return usageErr(fmt.Errorf("%s takes flags only", command))
 	}
+	if *restore && *adoptSource {
+		return usageErr(errors.New("--restore and --adopt-source are mutually exclusive"))
+	}
 	return a.withStore(ctx, func(st *store.Store) error {
-		stats, err := whatsappdb.ImportWithOptions(ctx, st, whatsappdb.ImportOptions{SourcePath: *source, CopyMedia: *copyMedia})
+		stats, err := whatsappdb.ImportWithOptions(ctx, st, whatsappdb.ImportOptions{SourcePath: *source, CopyMedia: *copyMedia, Restore: *restore, AdoptSource: *adoptSource})
 		if err != nil {
 			return err
 		}
@@ -544,12 +549,12 @@ func (a *app) print(value any) error {
 	}
 	switch v := value.(type) {
 	case store.ImportStats:
-		_, err := fmt.Fprintf(a.stdout, "source=%s\ndb=%s\nchats=%d\ncontacts=%d\ngroups=%d\nparticipants=%d\nmessages=%d\nmedia_messages=%d\nmedia_copied=%d\nmedia_missing=%d\n",
-			v.SourcePath, v.DBPath, v.Chats, v.Contacts, v.Groups, v.Participants, v.Messages, v.MediaMessages, v.MediaCopied, v.MediaMissing)
+		_, err := fmt.Fprintf(a.stdout, "mode=%s\nsource=%s\ndb=%s\nchats=%d\ncontacts=%d\ngroups=%d\nparticipants=%d\nmessages=%d\nmedia_messages=%d\nmedia_copied=%d\nmedia_missing=%d\n",
+			v.Mode, v.SourcePath, v.DBPath, v.Chats, v.Contacts, v.Groups, v.Participants, v.Messages, v.MediaMessages, v.MediaCopied, v.MediaMissing)
 		return err
 	case store.Status:
-		_, err := fmt.Fprintf(a.stdout, "db=%s\nchats=%d\nunread_chats=%d\nunread_messages=%d\ncontacts=%d\ngroups=%d\nparticipants=%d\nmessages=%d\nmedia_messages=%d\noldest=%s\nnewest=%s\nlast_import=%s\nsource=%s\n",
-			v.DBPath, v.Chats, v.UnreadChats, v.UnreadMessages, v.Contacts, v.Groups, v.Participants, v.Messages, v.MediaMessages, formatTime(v.OldestMessage), formatTime(v.NewestMessage), formatTime(v.LastImportAt), v.LastSource)
+		_, err := fmt.Fprintf(a.stdout, "db=%s\nchats=%d\nunread_chats=%d\nunread_messages=%d\ncontacts=%d\ngroups=%d\nparticipants=%d\nmessages=%d\nmedia_messages=%d\ndeleted_chats=%d\ndeleted_contacts=%d\ndeleted_groups=%d\ndeleted_participants=%d\ndeleted_messages=%d\nmessage_revisions=%d\noldest=%s\nnewest=%s\nlast_import=%s\nsource=%s\n",
+			v.DBPath, v.Chats, v.UnreadChats, v.UnreadMessages, v.Contacts, v.Groups, v.Participants, v.Messages, v.MediaMessages, v.DeletedChats, v.DeletedContacts, v.DeletedGroups, v.DeletedParticipants, v.DeletedMessages, v.MessageRevisions, formatTime(v.OldestMessage), formatTime(v.NewestMessage), formatTime(v.LastImportAt), v.LastSource)
 		return err
 	case []store.Chat:
 		tw := tabwriter.NewWriter(a.stdout, 2, 4, 2, ' ', 0)
@@ -643,6 +648,8 @@ Options:
 
 Import flags:
   --copy-media              Copy referenced media files into the archive media directory.
+  --adopt-source            Bind an existing unverified archive to this account and merge.
+  --restore                 Exactly replace archive rows instead of merging.
 
 Examples:
   wacrawl doctor
@@ -685,17 +692,21 @@ Examples:
 		_, _ = fmt.Fprintf(w, `Snapshot WhatsApp Desktop SQLite data into the archive.
 
 Usage:
-  wacrawl %s [--source PATH] [--copy-media]
+  wacrawl %s [--source PATH] [--copy-media] [--adopt-source] [--restore]
 
 Flags:
   --source PATH   WhatsApp Desktop source path.
   --copy-media    Copy referenced media files into media/ next to the archive DB.
+  --adopt-source  Bind an existing unverified archive to this account and merge.
+  --restore       Exactly replace archive rows instead of merging.
 
 Examples:
   wacrawl %s
   wacrawl %s --copy-media
+  wacrawl %s --adopt-source
+  wacrawl %s --restore
   wacrawl --db /tmp/wacrawl.db %s
-`, name, name, name, name)
+`, name, name, name, name, name, name)
 	case "status":
 		_, _ = fmt.Fprint(w, `Show archive status, counts, date span, unread counts, and last import metadata.
 

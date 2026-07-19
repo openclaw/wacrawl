@@ -1,32 +1,33 @@
 -- name: CountChats :one
-select count(*) from chats;
+select count(*) from chats where deleted_at is null;
 
 -- name: CountUnreadChats :one
-select count(*) from chats where unread_count > 0;
+select count(*) from chats where deleted_at is null and unread_count > 0;
 
 -- name: CountUnreadMessages :one
-select cast(coalesce(sum(unread_count), 0) as integer) as unread_messages from chats;
+select cast(coalesce(sum(unread_count), 0) as integer) as unread_messages from chats where deleted_at is null;
 
 -- name: CountContacts :one
-select count(*) from contacts;
+select count(*) from contacts where deleted_at is null;
 
 -- name: CountGroups :one
-select count(*) from groups;
+select count(*) from groups where deleted_at is null;
 
 -- name: CountParticipants :one
-select count(*) from group_participants;
+select count(*) from group_participants where deleted_at is null;
 
 -- name: CountMessages :one
-select count(*) from messages;
+select count(*) from messages where deleted_at is null;
 
 -- name: CountMediaMessages :one
-select count(*) from messages where media_type <> '' or media_path <> '' or media_url <> '';
+select count(*) from messages where deleted_at is null and (media_type <> '' or media_path <> '' or media_url <> '');
 
 -- name: GetMessageTimeBounds :one
 select
 	cast(coalesce(min(case when ts > 0 and ts <= 253402300799 then ts end), 0) as integer) as oldest_ts,
 	cast(coalesce(max(case when ts > 0 and ts <= 253402300799 then ts end), 0) as integer) as newest_ts
-from messages;
+from messages
+where deleted_at is null;
 
 -- name: GetSyncState :one
 select value from sync_state where key = sqlc.arg(key);
@@ -44,7 +45,8 @@ select
 	c.raw_session_type,
 	count(m.rowid) as message_count
 from chats c
-left join messages m on m.chat_jid = c.jid
+left join messages m on m.chat_jid = c.jid and m.deleted_at is null
+where c.deleted_at is null
 group by c.jid, c.kind, c.name, c.last_message_at, c.unread_count, c.archived, c.removed, c.hidden, c.raw_session_type
 order by case when c.last_message_at > 0 and c.last_message_at <= 253402300799 then c.last_message_at else 0 end desc
 limit sqlc.arg(limit);
@@ -62,8 +64,8 @@ select
 	c.raw_session_type,
 	count(m.rowid) as message_count
 from chats c
-left join messages m on m.chat_jid = c.jid
-where c.unread_count > 0
+left join messages m on m.chat_jid = c.jid and m.deleted_at is null
+where c.deleted_at is null and c.unread_count > 0
 group by c.jid, c.kind, c.name, c.last_message_at, c.unread_count, c.archived, c.removed, c.hidden, c.raw_session_type
 order by case when c.last_message_at > 0 and c.last_message_at <= 253402300799 then c.last_message_at else 0 end desc
 limit sqlc.arg(limit);
@@ -79,7 +81,11 @@ select
 	coalesce(username, '') as username,
 	coalesce(lid, '') as lid,
 	coalesce(about_text, '') as about_text,
-	coalesce(updated_at, 0) as updated_at
+	coalesce(updated_at, 0) as updated_at,
+	coalesce(deleted_at, 0) as deleted_at,
+	coalesce(deletion_source, '') as deletion_source,
+	coalesce(deletion_reason, '') as deletion_reason,
+	last_seen_at
 from contacts
 order by jid;
 
@@ -93,7 +99,11 @@ select
 	archived,
 	removed,
 	hidden,
-	raw_session_type
+	raw_session_type,
+	coalesce(deleted_at, 0) as deleted_at,
+	coalesce(deletion_source, '') as deletion_source,
+	coalesce(deletion_reason, '') as deletion_reason,
+	last_seen_at
 from chats
 order by jid;
 
@@ -102,7 +112,11 @@ select
 	jid,
 	coalesce(name, '') as name,
 	coalesce(owner_jid, '') as owner_jid,
-	coalesce(created_at, 0) as created_at
+	coalesce(created_at, 0) as created_at,
+	coalesce(deleted_at, 0) as deleted_at,
+	coalesce(deletion_source, '') as deletion_source,
+	coalesce(deletion_reason, '') as deletion_reason,
+	last_seen_at
 from groups
 order by jid;
 
@@ -113,7 +127,11 @@ select
 	coalesce(contact_name, '') as contact_name,
 	coalesce(first_name, '') as first_name,
 	is_admin,
-	is_active
+	is_active,
+	coalesce(deleted_at, 0) as deleted_at,
+	coalesce(deletion_source, '') as deletion_source,
+	coalesce(deletion_reason, '') as deletion_reason,
+	last_seen_at
 from group_participants
 order by group_jid, user_jid;
 
@@ -155,8 +173,8 @@ insert into group_participants(group_jid, user_jid, contact_name, first_name, is
 values(sqlc.arg(group_jid), sqlc.arg(user_jid), sqlc.arg(contact_name), sqlc.arg(first_name), sqlc.arg(is_admin), sqlc.arg(is_active));
 
 -- name: InsertMessage :exec
-insert into messages(source_pk, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
-values(sqlc.arg(source_pk), sqlc.arg(chat_jid), sqlc.arg(chat_name), sqlc.arg(msg_id), sqlc.arg(sender_jid), sqlc.arg(sender_name), sqlc.arg(ts), sqlc.arg(from_me), sqlc.arg(text), sqlc.arg(raw_type), sqlc.arg(message_type), sqlc.arg(media_type), sqlc.arg(media_title), sqlc.arg(media_path), sqlc.arg(media_url), sqlc.arg(media_size), sqlc.arg(starred));
+insert into messages(source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
+values(sqlc.arg(source_pk), sqlc.arg(event_id), sqlc.arg(chat_jid), sqlc.arg(chat_name), sqlc.arg(msg_id), sqlc.arg(sender_jid), sqlc.arg(sender_name), sqlc.arg(ts), sqlc.arg(from_me), sqlc.arg(text), sqlc.arg(raw_type), sqlc.arg(message_type), sqlc.arg(media_type), sqlc.arg(media_title), sqlc.arg(media_path), sqlc.arg(media_url), sqlc.arg(media_size), sqlc.arg(starred));
 
 -- name: InsertMessageFTS :exec
 insert into messages_fts(rowid, text, chat, sender, media)

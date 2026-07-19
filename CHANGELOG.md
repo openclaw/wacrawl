@@ -2,6 +2,16 @@
 
 ## [0.3.5] - Unreleased
 
+### Highlights
+
+- Preserve cumulative WhatsApp history with tombstone-safe merge imports, explicit exact restores, stable message event identity, and retained edit/delete revisions (#38).
+
+### Changed
+
+- Make `import` and `sync` merge by default so rows missing from an incomplete Desktop snapshot remain searchable, bind merges to hashed account and source-store fingerprints, provide explicit `--adopt-source` for legacy archives, and use `--restore` for intentional exact replacement.
+- Add source-attributed tombstones to contacts, chats, groups, participants, and messages, including subordinate tombstones for deleted parents and explicit WhatsApp removal, inactivity, and cleared-message signals.
+- Migrate existing archives in place without rewriting canonical rows, retain prior message payloads in `message_revisions`, and exclude tombstoned rows from normal reads while keeping them in encrypted backups.
+
 ## [0.3.4] - 2026-07-17
 
 ### Highlights
