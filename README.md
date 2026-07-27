@@ -751,25 +751,14 @@ Important details:
 Requires Go 1.26 or newer.
 
 ```bash
+make help
 make check
 ```
 
-Runs:
-
-```bash
-golangci-lint run ./...
-./scripts/coverage.sh 85.0
-go build -o bin/wacrawl ./cmd/wacrawl
-```
-
-Extra release-parity checks:
-
-```bash
-go test -count=1 -race ./...
-goreleaser release --snapshot --clean --skip=publish
-```
-
-Coverage must stay at or above 85%.
+`make check` runs every local gate enforced by CI, including formatting, static
+analysis, tests and the race detector, the 85% coverage floor, dependency and
+vulnerability checks, a credential-free GoReleaser snapshot, release-script
+tests, and secret scans.
 
 ## Release
 
@@ -781,12 +770,15 @@ the Developer ID private key or publishes unsigned Darwin binaries.
 git tag -s v0.3.4 -m "Release 0.3.4"
 git push origin main
 git push origin v0.3.4
-make release-artifacts VERSION=v0.3.4
+make release VERSION=v0.3.4
 ```
 
-`make release-artifacts` wraps GoReleaser with the shared `release-mac-app codesign-run`
-helper. The helper loads the managed OpenClaw identity from the
-authorized Mac's runtime configuration; keychain locations and credentials do
+`make release` wraps GoReleaser with the shared `release-mac-app codesign-run`
+helper, then fails unless the package script verifies both final Darwin archives,
+including their signatures and notarization tickets. Use `make verify-release VERSION=v0.3.4`
+to recheck artifacts that were already built. The former `make release-artifacts`
+name remains an alias for compatibility. The helper loads the managed OpenClaw
+identity from the authorized Mac's runtime configuration; keychain locations and credentials do
 not belong in the repository. Set `NOTARYTOOL_KEYCHAIN_PROFILE` at runtime to a
 notarytool profile stored in the login keychain; release packaging fails closed
 when it is absent. Both Darwin binaries are signed with the hardened runtime,
@@ -800,7 +792,7 @@ Create a draft GitHub release and attach the archives plus `checksums.txt` from
 reruns signature, hardened-runtime, and notarization verification before
 dispatching the Homebrew update.
 
-Local builds and GoReleaser snapshots do not require signing credentials. They
+Local builds and `make snapshot` do not require signing credentials. They
 remain suitable for development and cross-platform CI, but are not official
 macOS release artifacts.
 
