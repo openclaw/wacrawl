@@ -12,7 +12,7 @@
 - Add source-attributed tombstones to contacts, chats, groups, participants, and messages, including subordinate tombstones for deleted parents and explicit WhatsApp removal, inactivity, and cleared-message signals.
 - Migrate existing archives in place without rewriting canonical rows, retain prior message payloads in `message_revisions`, and exclude tombstoned rows from normal reads while keeping them in encrypted backups.
 - Standardize local build, CI-parity check, snapshot, and fail-closed release commands under the shared crawler Makefile contract.
-- Update go-isatty to v0.0.24 and refresh Go cryptography and system dependencies.
+- Update go-isatty to v0.0.24 and refresh Go cryptography, system, and SQLite runtime dependencies.
 
 ### Security
 
