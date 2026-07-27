@@ -23,6 +23,6 @@ func fileMaterialized(info os.FileInfo) bool {
 // openMediaFile opens with O_NONBLOCK so a dataless file fails fast instead of
 // stalling the request goroutine on materialization; the flag has no effect on
 // reads of ordinary regular files.
-func openMediaFile(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) // #nosec G304 -- media_path was written by our own importer, not request input.
+func openMediaFile(root *os.Root, path string) (*os.File, error) {
+	return root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) // #nosec G304 G703 -- containedMediaPath resolves and confines the path before this rooted call.
 }

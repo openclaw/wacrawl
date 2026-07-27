@@ -75,6 +75,7 @@ type Status struct {
 	LastImportAt        time.Time `json:"last_import_at,omitzero"`
 	LastSourceSnapshot  time.Time `json:"-"`
 	LastSource          string    `json:"last_source,omitempty"`
+	SourceRoot          string    `json:"-"`
 	LastSourceMessages  int       `json:"last_source_messages,omitempty"`
 	LastSourceContacts  int       `json:"last_source_contacts,omitempty"`
 	SourceMessagesKnown bool      `json:"-"`
@@ -1030,6 +1031,10 @@ func (s *Store) Status(ctx context.Context) (Status, error) {
 		out.LastSourceSnapshot, _ = time.Parse(time.RFC3339Nano, value)
 	}
 	out.LastSource, _ = s.q.GetSyncState(ctx, "source_path")
+	out.SourceRoot, _ = s.q.GetSyncState(ctx, "merge_source_path")
+	if out.SourceRoot == "" {
+		out.SourceRoot = out.LastSource
+	}
 	if value, err := s.q.GetSyncState(ctx, "source_messages"); err == nil {
 		if out.LastSourceMessages, err = strconv.Atoi(value); err == nil {
 			out.SourceMessagesKnown = true

@@ -12,6 +12,10 @@
 - Add source-attributed tombstones to contacts, chats, groups, participants, and messages, including subordinate tombstones for deleted parents and explicit WhatsApp removal, inactivity, and cleared-message signals.
 - Migrate existing archives in place without rewriting canonical rows, retain prior message payloads in `message_revisions`, and exclude tombstoned rows from normal reads while keeping them in encrypted backups.
 
+### Security
+
+- Constrain web viewer media reads to the archive media directory and bound WhatsApp Desktop source, including symlink-safe containment checks.
+
 ## [0.3.4] - 2026-07-17
 
 ### Highlights

@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -39,9 +40,16 @@ type Config struct {
 }
 
 type handler struct {
-	store       *store.Store
-	token       string
-	allowedHost string
+	store             *store.Store
+	token             string
+	allowedHost       string
+	allowedMediaRoots []allowedMediaRoot
+}
+
+type allowedMediaRoot struct {
+	path        string
+	lexicalPath string
+	root        *os.Root
 }
 
 type statusResponse struct {
@@ -99,6 +107,11 @@ func Serve(ctx context.Context, archive *store.Store, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	status, err := archive.Status(ctx)
+	if err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("read archive media roots: %w", err)
+	}
 	host := listener.Addr().String()
 	url := "http://" + host + "/#" + token
 	output := cfg.Output
@@ -107,8 +120,10 @@ func Serve(ctx context.Context, archive *store.Store, cfg Config) error {
 	}
 	_, _ = fmt.Fprintf(output, "wacrawl web viewer\n%s\n\nLocal and read-only. Keep this URL private; Ctrl-C stops the server.\n", url)
 
+	handler := NewHandler(archive, token, host, status.SourceRoot)
+	defer handler.close()
 	server := &http.Server{
-		Handler:           NewHandler(archive, token, host),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       time.Minute,
 	}
@@ -134,8 +149,36 @@ func Serve(ctx context.Context, archive *store.Store, cfg Config) error {
 	return nil
 }
 
-func NewHandler(archive *store.Store, token, allowedHost string) http.Handler {
-	return &handler{store: archive, token: token, allowedHost: allowedHost}
+func NewHandler(archive *store.Store, token, allowedHost string, sourceRoots ...string) *handler {
+	mediaRoots := []string{filepath.Join(filepath.Dir(archive.Path()), "media")}
+	for _, root := range sourceRoots {
+		if strings.TrimSpace(root) != "" && filepath.IsAbs(root) {
+			mediaRoots = append(mediaRoots, root)
+		}
+	}
+	h := &handler{store: archive, token: token, allowedHost: allowedHost}
+	for _, root := range mediaRoots {
+		absolute, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			continue
+		}
+		opened, err := os.OpenRoot(resolved)
+		if err != nil {
+			continue
+		}
+		h.allowedMediaRoots = append(h.allowedMediaRoots, allowedMediaRoot{path: resolved, lexicalPath: filepath.Clean(absolute), root: opened})
+	}
+	return h
+}
+
+func (h *handler) close() {
+	for _, root := range h.allowedMediaRoots {
+		_ = root.root.Close()
+	}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -336,8 +379,8 @@ func messagesForWeb(messages []store.Message) []messageResponse {
 
 // serveMedia streams archived image bytes for one message so the viewer can
 // render photos, stickers, and GIFs inline. It reads local files referenced by
-// our own importer, serves only content that sniffs as an image, and never
-// reveals the underlying path.
+// configured archive or source roots, serves only content that sniffs as an
+// image, and never reveals the underlying path.
 func (h *handler) serveMedia(w http.ResponseWriter, r *http.Request) {
 	raw := strings.TrimSpace(r.URL.Query().Get("pk"))
 	sourcePK, err := strconv.ParseInt(raw, 10, 64)
@@ -359,7 +402,18 @@ func (h *handler) serveMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no inline preview", http.StatusNotFound)
 		return
 	}
-	info, err := os.Stat(path)
+	root, path, ok := containedMediaPath(path, h.allowedMediaRoots)
+	if !ok {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	file, err := openMediaFile(root, path)
+	if err != nil {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
@@ -374,13 +428,6 @@ func (h *handler) serveMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "media not downloaded locally", http.StatusNotFound)
 		return
 	}
-	file, err := openMediaFile(path)
-	if err != nil {
-		http.Error(w, "media unavailable", http.StatusNotFound)
-		return
-	}
-	defer func() { _ = file.Close() }()
-
 	sniff := make([]byte, 512)
 	n, err := io.ReadFull(file, sniff)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
@@ -400,6 +447,39 @@ func (h *handler) serveMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = io.Copy(w, file)
+}
+
+func containedMediaPath(path string, roots []allowedMediaRoot) (*os.Root, string, bool) {
+	if !filepath.IsAbs(path) {
+		return nil, "", false
+	}
+	candidate, err := filepath.Abs(path)
+	if err != nil {
+		return nil, "", false
+	}
+	for _, root := range roots {
+		if !pathWithinRoot(root.lexicalPath, candidate) && !pathWithinRoot(root.path, candidate) {
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return nil, "", false
+		}
+		if relative, ok := relativeToRoot(root.path, resolved); ok {
+			return root.root, relative, true
+		}
+	}
+	return nil, "", false
+}
+
+func pathWithinRoot(root, candidate string) bool {
+	_, ok := relativeToRoot(root, candidate)
+	return ok
+}
+
+func relativeToRoot(root, candidate string) (string, bool) {
+	relative, err := filepath.Rel(root, candidate)
+	return relative, err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) && !filepath.IsAbs(relative)
 }
 
 func inlineImageMessage(message store.Message) bool {

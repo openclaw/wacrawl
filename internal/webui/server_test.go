@@ -146,13 +146,19 @@ func TestHandlerServesInlineMedia(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = archive.Close() })
 
-	dir := t.TempDir()
+	dir := filepath.Join(filepath.Dir(archive.Path()), "media")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	imagePath := filepath.Join(dir, "photo.png")
 	imageBytes := writeTestPNG(t, imagePath)
 	textPath := filepath.Join(dir, "notes.txt")
 	if err := os.WriteFile(textPath, []byte("plain text, definitely not an image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	sourceRoot := t.TempDir()
+	sourceImagePath := filepath.Join(sourceRoot, "source-photo.png")
+	sourceImageBytes := writeTestPNG(t, sourceImagePath)
 
 	const jid = "555@s.whatsapp.net"
 	now := time.Date(2026, 7, 2, 9, 0, 0, 0, time.UTC)
@@ -163,11 +169,13 @@ func TestHandlerServesInlineMedia(t *testing.T) {
 		{SourcePK: 2, ChatJID: jid, MessageID: "p2", Timestamp: now, Text: "no media"},
 		{SourcePK: 3, ChatJID: jid, MessageID: "p3", Timestamp: now, MediaType: "image", MediaPath: textPath},
 		{SourcePK: 4, ChatJID: jid, MessageID: "p4", Timestamp: now, MediaType: "image", MediaPath: filepath.Join(dir, "missing.jpg")},
+		{SourcePK: 5, ChatJID: jid, MessageID: "p5", Timestamp: now, MediaType: "image", MediaPath: sourceImagePath},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(archive, testToken, testHost)
+	handler := NewHandler(archive, testToken, testHost, sourceRoot)
+	t.Cleanup(handler.close)
 
 	unauthorized := request(t, handler, "/api/media?pk=1", "")
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -180,6 +188,10 @@ func TestHandlerServesInlineMedia(t *testing.T) {
 	}
 	if !bytes.Equal(image.Body.Bytes(), imageBytes) {
 		t.Fatalf("media bytes mismatch: got %d want %d", image.Body.Len(), len(imageBytes))
+	}
+	sourceImage := request(t, handler, "/api/media?pk=5", testToken)
+	if sourceImage.Code != http.StatusOK || !bytes.Equal(sourceImage.Body.Bytes(), sourceImageBytes) {
+		t.Fatalf("source media status=%d bytes=%d want %d", sourceImage.Code, sourceImage.Body.Len(), len(sourceImageBytes))
 	}
 
 	for _, tc := range []struct {
@@ -197,6 +209,56 @@ func TestHandlerServesInlineMedia(t *testing.T) {
 		response := request(t, handler, "/api/media?"+tc.query, testToken)
 		if response.Code != tc.code {
 			t.Fatalf("media %s status=%d want %d", tc.query, response.Code, tc.code)
+		}
+	}
+}
+
+func TestHandlerRejectsMediaOutsideAllowedRoots(t *testing.T) {
+	ctx := context.Background()
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+
+	mediaRoot := filepath.Join(filepath.Dir(archive.Path()), "media")
+	if err := os.MkdirAll(mediaRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(filepath.Dir(mediaRoot), "secret.png")
+	writeTestPNG(t, secretPath)
+	outsidePath := filepath.Join(t.TempDir(), "outside.png")
+	writeTestPNG(t, outsidePath)
+	const jid = "555@s.whatsapp.net"
+	now := time.Date(2026, 7, 2, 10, 0, 0, 0, time.UTC)
+	messages := []store.Message{
+		{SourcePK: 1, ChatJID: jid, MessageID: "outside", Timestamp: now, MediaType: "image", MediaPath: outsidePath},
+		{SourcePK: 2, ChatJID: jid, MessageID: "traversal", Timestamp: now, MediaType: "image", MediaPath: mediaRoot + string(os.PathSeparator) + ".." + string(os.PathSeparator) + filepath.Base(secretPath)},
+		{SourcePK: 4, ChatJID: jid, MessageID: "relative", Timestamp: now, MediaType: "image", MediaPath: "media/photo.png"},
+	}
+	sourcePKs := []int{1, 2, 4}
+	symlinkPath := filepath.Join(mediaRoot, "linked.png")
+	if err := os.Symlink(outsidePath, symlinkPath); err != nil {
+		t.Logf("symlink escape case unavailable: %v", err)
+	} else {
+		messages = append(messages, store.Message{SourcePK: 3, ChatJID: jid, MessageID: "symlink", Timestamp: now, MediaType: "image", MediaPath: symlinkPath})
+		sourcePKs = append(sourcePKs, 3)
+	}
+	if err := archive.ReplaceAll(ctx, store.ImportStats{FinishedAt: now}, nil, []store.Chat{
+		{JID: jid, Kind: "dm", Name: "Media Tester", LastMessageAt: now},
+	}, nil, nil, messages); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(archive, testToken, testHost)
+	t.Cleanup(handler.close)
+	for _, sourcePK := range sourcePKs {
+		response := request(t, handler, "/api/media?pk="+strconv.Itoa(sourcePK), testToken)
+		if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), "media unavailable") {
+			t.Fatalf("media pk=%d status=%d body=%q", sourcePK, response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), "secret") || strings.Contains(response.Body.String(), "outside") {
+			t.Fatalf("media pk=%d exposed path in body %q", sourcePK, response.Body.String())
 		}
 	}
 }
@@ -313,7 +375,7 @@ func TestServeLifecycleAndPrivateURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+parsed.Fragment)
-	response, err = http.DefaultClient.Do(req)
+	response, err = http.DefaultClient.Do(req) // #nosec G704 -- test URL is derived from Serve's fresh loopback listener.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,6 +418,7 @@ func TestHandlerArchiveAndAssetFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewHandler(archive, testToken, testHost)
+	t.Cleanup(h.close)
 	for _, path := range []string{"/api/status", "/api/chats", "/api/messages"} {
 		response := request(t, h, path, testToken)
 		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "archive unavailable") {
@@ -378,7 +441,9 @@ func TestHandlerArchiveAndAssetFailures(t *testing.T) {
 
 func testHandler(t *testing.T) http.Handler {
 	t.Helper()
-	return NewHandler(testArchive(t), testToken, testHost)
+	h := NewHandler(testArchive(t), testToken, testHost)
+	t.Cleanup(h.close)
+	return h
 }
 
 func testArchive(t *testing.T) *store.Store {
