@@ -4,21 +4,28 @@ go 1.26.5
 
 require (
 	filippo.io/age v1.3.1
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
+)
+
+require (
+	c2sp.org/CCTV/age v0.0.0-20260605191406-1e3d2860d46e // indirect
+	golang.org/x/tools v0.48.0 // indirect
+	modernc.org/cc/v4 v4.29.2 // indirect
+	modernc.org/gc/v3 v3.1.5 // indirect
 )
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
+	github.com/google/pprof v0.0.0-20260802004507-5106ece31595 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/openclaw/crawlkit v0.14.3
+	github.com/openclaw/crawlkit v0.14.4
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	modernc.org/libc v1.74.3 // indirect
+	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
