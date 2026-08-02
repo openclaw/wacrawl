@@ -8,9 +8,16 @@ require (
 )
 
 require (
+	c2sp.org/CCTV/age v0.0.0-20260605191406-1e3d2860d46e // indirect
+	golang.org/x/tools v0.48.0 // indirect
+	modernc.org/cc/v4 v4.29.2 // indirect
+	modernc.org/gc/v3 v3.1.5 // indirect
+)
+
+require (
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
+	github.com/google/pprof v0.0.0-20260802004507-5106ece31595 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
