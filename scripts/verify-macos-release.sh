@@ -58,7 +58,8 @@ for archive in "$@"; do
 
   verify_checksum "$archive" "$checksum"
   expected_entries=$'CHANGELOG.md\nLICENSE\nREADME.md\nwacrawl'
-  actual_entries=$(tar -tzf "$archive" | LC_ALL=C sort)
+  archive_entries=$(tar -tzf "$archive")
+  actual_entries=$(sed -e 's#^\./##' -e '/^$/d' <<<"$archive_entries" | LC_ALL=C sort)
   [[ "$actual_entries" == "$expected_entries" ]] || {
     echo "unexpected archive contents: $(basename "$archive")" >&2
     exit 1
@@ -67,7 +68,11 @@ for archive in "$@"; do
   stage="$work_dir/$expected_arch"
   mkdir -p "$stage"
   binary="$stage/wacrawl"
-  tar -xOf "$archive" wacrawl > "$binary"
+  binary_member=wacrawl
+  if grep -Fx './wacrawl' <<<"$archive_entries" >/dev/null; then
+    binary_member=./wacrawl
+  fi
+  tar -xOf "$archive" "$binary_member" > "$binary"
   chmod 0755 "$binary"
 
   codesign --verify --strict -R="$requirement" --verbose=2 "$binary"

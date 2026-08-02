@@ -204,7 +204,11 @@ echo 0.3.4
 EOF
   chmod 0755 "$stage/wacrawl"
   archive="$assets/wacrawl_0.3.4_darwin_${arch}.tar.gz"
-  tar -czf "$archive" -C "$stage" CHANGELOG.md LICENSE README.md wacrawl
+  if [[ "$arch" == arm64 ]]; then
+    tar -czf "$archive" -C "$stage" .
+  else
+    tar -czf "$archive" -C "$stage" CHANGELOG.md LICENSE README.md wacrawl
+  fi
   (
     cd "$assets"
     shasum -a 256 "$(basename "$archive")" >> checksums.txt
