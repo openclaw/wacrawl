@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.6] - Unreleased
+
+### Fixed
+
+- Verify unified release archives with normalized `./` tar members.
+
 ## [0.3.5] - 2026-08-02
 
 ### Highlights
