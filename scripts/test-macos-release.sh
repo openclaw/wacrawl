@@ -12,9 +12,25 @@ fail() {
 for script in codesign-macos.sh download-release-assets.sh package-wacrawl-release.sh verify-macos-release.sh; do
   bash -n "$root/scripts/$script"
 done
-grep -F "github.event_name == 'release' ||" "$root/.github/workflows/release.yml" >/dev/null
-grep -F 'persist-credentials: false' "$root/.github/workflows/release.yml" >/dev/null
-grep -F 'path: trusted' "$root/.github/workflows/release.yml" >/dev/null
+unified="$root/.github/workflows/release-unified.yml"
+[[ -f "$unified" ]] || fail "unified release workflow is missing"
+[[ ! -e "$root/.github/workflows/release.yml" ]] || fail "legacy release workflow still exists"
+grep -F 'uses: openclaw/release-workflows/.github/workflows/release-go-cli.yml@v1' "$unified" >/dev/null
+grep -F 'homebrew-tap: openclaw/homebrew-tap' "$unified" >/dev/null
+grep -F 'homebrew-formula: wacrawl' "$unified" >/dev/null
+grep -F "archive-files: '[\"CHANGELOG.md\",\"LICENSE\",\"README.md\"]'" "$unified" >/dev/null
+grep -F 'checksum-filename: checksums.txt' "$unified" >/dev/null
+grep -F 'nfpm: auto' "$unified" >/dev/null
+grep -F 'stable-identifier: org.openclaw.wacrawl' "$unified" >/dev/null
+grep -F 'darwin-universal: disabled' "$unified" >/dev/null
+if grep -F 'require-signed-tag: true' "$unified" >/dev/null; then
+  fail "unified release workflow still requires a locally signed tag"
+fi
+if release_output=$(make -s -C "$root" release VERSION=v0.3.5 2>&1); then
+  fail "local release target unexpectedly succeeded"
+fi
+grep -F 'gh workflow run release-unified.yml --repo openclaw/wacrawl --ref main -f version=0.3.5' <<<"$release_output" >/dev/null || \
+  fail "local release target does not redirect to unified workflow"
 
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/wacrawl-release-test.XXXXXX")
 trap 'rm -rf "$work_dir"' EXIT

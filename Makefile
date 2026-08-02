@@ -14,7 +14,7 @@ help:
 		'  lint              Run every static-analysis gate enforced by CI.' \
 		'  check             Run every local gate enforced by CI.' \
 		'  snapshot          Build credential-free release artifacts.' \
-		'  release           Build and verify official release artifacts (VERSION=vX.Y.Z).' \
+		'  release           Refuse local publishing and print the official CI command.' \
 		'  verify-release    Verify existing release artifacts (VERSION=vX.Y.Z).' \
 		'  coverage          Run tests and enforce the coverage floor.' \
 		'  test-race         Run the Go test suite with the race detector.' \
@@ -77,8 +77,10 @@ check: fmt lint test test-race coverage build deps snapshot test-release secrets
 
 release:
 	@test -n "$(VERSION)" || (echo "usage: make release VERSION=vX.Y.Z" >&2; exit 2)
-	@helper="$${MAC_RELEASE_HELPER:-$$HOME/Projects/agent-scripts/skills/release-mac-app/scripts/mac-release}"; \
-	"$$helper" codesign-run -- ./scripts/package-wacrawl-release.sh "$(VERSION)"
+	@version="$(VERSION)"; version="$${version#v}"; \
+	echo "local releases are disabled; official releases run in GitHub Actions" >&2; \
+	echo "gh workflow run release-unified.yml --repo openclaw/wacrawl --ref main -f version=$$version" >&2; \
+	exit 1
 
 verify-release:
 	@test -n "$(VERSION)" || (echo "usage: make verify-release VERSION=vX.Y.Z" >&2; exit 2)
