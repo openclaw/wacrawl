@@ -762,35 +762,26 @@ tests, and secret scans.
 
 ## Release
 
-Release artifacts are built locally from the exact signed tag on an authorized
-maintainer Mac. CI validates snapshots and published assets; it never receives
-the Developer ID private key or publishes unsigned Darwin binaries.
+Official releases run entirely in GitHub Actions through the shared OpenClaw
+release workflow. The workflow freezes the protected `main` commit, creates the
+annotated version tag, builds every platform archive, signs and notarizes the
+Darwin binaries with organization secrets, verifies the unpublished draft on
+both macOS architectures, publishes the exact verified bytes, and hands the
+release to the OpenClaw Homebrew tap.
 
 ```bash
-git tag -s v0.3.4 -m "Release 0.3.4"
-git push origin main
-git push origin v0.3.4
-make release VERSION=v0.3.4
+gh workflow run release-unified.yml \
+  --repo openclaw/wacrawl \
+  --ref main \
+  -f version=0.3.5
 ```
 
-`make release` wraps GoReleaser with the shared `release-mac-app codesign-run`
-helper, then fails unless the package script verifies both final Darwin archives,
-including their signatures and notarization tickets. Use `make verify-release VERSION=v0.3.4`
-to recheck artifacts that were already built. The former `make release-artifacts`
-name remains an alias for compatibility. The helper loads the managed OpenClaw
-identity from the authorized Mac's runtime configuration; keychain locations and credentials do
-not belong in the repository. Set `NOTARYTOOL_KEYCHAIN_PROFILE` at runtime to a
-notarytool profile stored in the login keychain; release packaging fails closed
-when it is absent. Both Darwin binaries are signed with the hardened runtime,
-stable identifier `org.openclaw.wacrawl`, and exact identity `Developer ID
-Application: OpenClaw Foundation (FWJYW4S8P8)`, then submitted to Apple and
-required to pass the notarization assessment before they enter an archive.
-
-Create a draft GitHub release and attach the archives plus `checksums.txt` from
-`dist/`. Run the `release` workflow from protected `main` with the tag and
-`draft=true` to verify the unpublished draft, then publish it. Publication
-reruns signature, hardened-runtime, and notarization verification before
-dispatching the Homebrew update.
+The version's changelog section must be dated before dispatch. Release tags,
+Developer ID credentials, App Store Connect credentials, draft publication,
+artifact verification, and Homebrew dispatch are owned by the reusable
+workflow; no local signing key, notary profile, allowed-signers file, or release
+token is required. `make release VERSION=v0.3.5` intentionally refuses local
+publication and prints the official workflow command instead.
 
 Local builds and `make snapshot` do not require signing credentials. They
 remain suitable for development and cross-platform CI, but are not official
