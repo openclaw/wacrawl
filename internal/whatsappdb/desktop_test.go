@@ -248,7 +248,8 @@ func TestReadAccountIdentity(t *testing.T) {
 	source := t.TempDir()
 	createFixtureDBs(t, source)
 	path := filepath.Join(source, axolotlDBName)
-	before, err := readAccountIdentity(ctx, path)
+	chatPath := filepath.Join(source, chatDBName)
+	before, err := readAccountIdentity(ctx, path, chatPath)
 	if err != nil || !strings.HasPrefix(before, "wa-account:") {
 		t.Fatalf("account identity = %q, %v", before, err)
 	}
@@ -260,11 +261,11 @@ func TestReadAccountIdentity(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	after, err := readAccountIdentity(ctx, path)
+	after, err := readAccountIdentity(ctx, path, chatPath)
 	if err != nil || after == before || !strings.HasPrefix(after, "wa-account:") {
 		t.Fatalf("account switch identity: before=%q after=%q err=%v", before, after, err)
 	}
-	if identity, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName)); err != nil || identity != "" {
+	if identity, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), filepath.Join(t.TempDir(), chatDBName)); err != nil || identity != "" {
 		t.Fatalf("missing account database identity = %q, %v", identity, err)
 	}
 
@@ -278,7 +279,7 @@ func TestReadAccountIdentity(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readAccountIdentity(ctx, filepath.Join(ambiguous, axolotlDBName)); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") || strings.Contains(err.Error(), "--restore") {
+	if _, err := readAccountIdentity(ctx, filepath.Join(ambiguous, axolotlDBName), filepath.Join(ambiguous, chatDBName)); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") || strings.Contains(err.Error(), "--restore") {
 		t.Fatalf("ambiguous account identity error = %v", err)
 	}
 }
@@ -295,30 +296,86 @@ func TestReadAccountIdentityFallbacks(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		identity, err := readAccountIdentity(ctx, path)
+		identity, err := readAccountIdentity(ctx, path, filepath.Join(t.TempDir(), chatDBName))
 		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
 			t.Fatalf("ZMD account fallback = %q, %v", identity, err)
 		}
 	})
-	t.Run("signal account columns", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), axolotlDBName)
-		db, err := sql.Open("sqlite", path)
+	t.Run("incoming message recipient", func(t *testing.T) {
+		dir := t.TempDir()
+		axolotlPath := filepath.Join(dir, axolotlDBName)
+		db, err := sql.Open("sqlite", axolotlPath)
 		if err != nil {
 			t.Fatal(err)
 		}
 		mustExec(t, db, `
+create table ZWAZMDACCOUNT (ZACCOUNTJIDSTRING varchar, ZUSERJIDSTRING varchar);
 create table ZWAAXOLOTLIDENTITY (ZACCOUNTJIDSTRING varchar);
 create table ZWAAXOLOTLSESSION (ZACCOUNTJIDSTRING varchar);
 create table ZWASENDERKEY (ZACCOUNTJIDSTRING varchar);
-insert into ZWAAXOLOTLIDENTITY values ('OWNER@S.WHATSAPP.NET');
-insert into ZWAAXOLOTLSESSION values ('owner@s.whatsapp.net');
-insert into ZWASENDERKEY values ('owner@s.whatsapp.net');`)
+insert into ZWAAXOLOTLIDENTITY values ('remote-a@s.whatsapp.net');
+insert into ZWAAXOLOTLSESSION values ('remote-b@s.whatsapp.net');
+insert into ZWASENDERKEY values ('remote-c@s.whatsapp.net');`)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		identity, err := readAccountIdentity(ctx, path)
+		chatPath := filepath.Join(dir, chatDBName)
+		db, err = sql.Open("sqlite", chatPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `
+create table ZWAMESSAGE (ZISFROMME integer, ZTOJID varchar);
+insert into ZWAMESSAGE values (0, 'OWNER@S.WHATSAPP.NET');
+insert into ZWAMESSAGE values (0, 'owner@s.whatsapp.net');
+insert into ZWAMESSAGE values (1, 'remote@s.whatsapp.net');`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, err := readAccountIdentity(ctx, axolotlPath, chatPath)
 		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
-			t.Fatalf("signal fallback = %q, %v", identity, err)
+			t.Fatalf("message recipient fallback = %q, %v", identity, err)
+		}
+	})
+	t.Run("message recipients are ambiguous", func(t *testing.T) {
+		chatPath := filepath.Join(t.TempDir(), chatDBName)
+		db, err := sql.Open("sqlite", chatPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `
+create table ZWAMESSAGE (ZISFROMME integer, ZTOJID varchar);
+insert into ZWAMESSAGE values (0, 'owner-a@s.whatsapp.net');
+insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net');`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), chatPath); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") {
+			t.Fatalf("ambiguous message recipients error = %v", err)
+		}
+	})
+	t.Run("metadata and messages disagree", func(t *testing.T) {
+		dir := t.TempDir()
+		axolotlPath := filepath.Join(dir, axolotlDBName)
+		db, err := sql.Open("sqlite", axolotlPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `create table ZWAZMDACCOUNT (ZUSERJIDSTRING varchar); insert into ZWAZMDACCOUNT values ('owner-a@s.whatsapp.net')`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		chatPath := filepath.Join(dir, chatDBName)
+		db, err = sql.Open("sqlite", chatPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `create table ZWAMESSAGE (ZISFROMME integer, ZTOJID varchar); insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net')`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readAccountIdentity(ctx, axolotlPath, chatPath); err == nil || !strings.Contains(err.Error(), "does not match") {
+			t.Fatalf("account metadata mismatch error = %v", err)
 		}
 	})
 	t.Run("empty schema", func(t *testing.T) {
@@ -331,7 +388,7 @@ insert into ZWASENDERKEY values ('owner@s.whatsapp.net');`)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		identity, err := readAccountIdentity(ctx, path)
+		identity, err := readAccountIdentity(ctx, path, filepath.Join(t.TempDir(), chatDBName))
 		if err != nil || identity != "" {
 			t.Fatalf("empty schema identity = %q, %v", identity, err)
 		}

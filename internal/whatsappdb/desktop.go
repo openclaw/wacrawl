@@ -188,11 +188,12 @@ func Extract(ctx context.Context, snap Snapshot) (Data, error) {
 	if err != nil {
 		return Data{}, err
 	}
-	accountIdentity, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlDBName))
+	chatDBPath := filepath.Join(snap.Root, chatDBName)
+	accountIdentity, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlDBName), chatDBPath)
 	if err != nil {
 		return Data{}, err
 	}
-	accountIdentityBefore, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlBeforeDBName))
+	accountIdentityBefore, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlBeforeDBName), chatDBPath)
 	if err != nil {
 		return Data{}, err
 	}
@@ -230,44 +231,81 @@ func readSourceIdentity(ctx context.Context, chatDBPath string) (string, error) 
 	return fmt.Sprintf("wa-store:%x", fingerprint), nil
 }
 
-func readAccountIdentity(ctx context.Context, axolotlDBPath string) (string, error) {
-	if _, err := os.Stat(axolotlDBPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", err
-	}
-	db, closeDB, err := openReadOnly(axolotlDBPath)
-	if err != nil {
-		return "", err
-	}
-	defer closeDB()
-
-	preferred, err := accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZUSERJIDSTRING")
-	if err != nil {
-		return "", err
-	}
-	if len(preferred) > 0 {
-		return accountFingerprint(preferred)
-	}
-	preferred, err = accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZACCOUNTJIDSTRING")
-	if err != nil {
-		return "", err
-	}
-	if len(preferred) > 0 {
-		return accountFingerprint(preferred)
-	}
-	fallback := make(map[string]struct{})
-	for _, table := range []string{"ZWAAXOLOTLIDENTITY", "ZWAAXOLOTLSESSION", "ZWASENDERKEY"} {
-		ids, err := accountIDs(ctx, db, table, "ZACCOUNTJIDSTRING")
+func readAccountIdentity(ctx context.Context, axolotlDBPath, chatDBPath string) (string, error) {
+	var metadataIDs map[string]struct{}
+	if _, err := os.Stat(axolotlDBPath); err == nil {
+		db, closeDB, err := openReadOnly(axolotlDBPath)
 		if err != nil {
 			return "", err
 		}
-		for id := range ids {
-			fallback[id] = struct{}{}
+		defer closeDB()
+
+		metadataIDs, err = accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZUSERJIDSTRING")
+		if err != nil {
+			return "", err
+		}
+		if len(metadataIDs) == 0 {
+			metadataIDs, err = accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZACCOUNTJIDSTRING")
+			if err != nil {
+				return "", err
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+
+	messageIDs, err := incomingMessageAccountIDs(ctx, chatDBPath)
+	if err != nil {
+		return "", err
+	}
+	metadataIdentity, err := accountFingerprint(metadataIDs)
+	if err != nil {
+		return "", err
+	}
+	messageIdentity, err := accountFingerprint(messageIDs)
+	if err != nil {
+		return "", err
+	}
+	if metadataIdentity != "" && messageIdentity != "" && metadataIdentity != messageIdentity {
+		return "", errors.New("WhatsApp account metadata does not match the imported message store")
+	}
+	if metadataIdentity != "" {
+		return metadataIdentity, nil
+	}
+	return messageIdentity, nil
+}
+
+func incomingMessageAccountIDs(ctx context.Context, chatDBPath string) (map[string]struct{}, error) {
+	ids := make(map[string]struct{})
+	if _, err := os.Stat(chatDBPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ids, nil
+		}
+		return nil, err
+	}
+	db, closeDB, err := openReadOnly(chatDBPath)
+	if err != nil {
+		return nil, err
+	}
+	defer closeDB()
+
+	for _, column := range []string{"ZISFROMME", "ZTOJID"} {
+		var present int
+		if err := db.QueryRowContext(ctx, `select count(*) from pragma_table_info('ZWAMESSAGE') where name=?`, column).Scan(&present); err != nil {
+			return nil, err
+		}
+		if present == 0 {
+			return ids, nil
 		}
 	}
-	return accountFingerprint(fallback)
+	if err := collectAccountIDs(ctx, db, `
+select coalesce(ZTOJID,'')
+from ZWAMESSAGE
+where coalesce(ZISFROMME,0)=0
+  and trim(coalesce(ZTOJID,''))<>''`, ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func accountIDs(ctx context.Context, db *sql.DB, table string, columns ...string) (map[string]struct{}, error) {

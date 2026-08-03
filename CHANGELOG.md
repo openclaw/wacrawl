@@ -5,6 +5,7 @@
 ### Fixed
 
 - Verify unified release archives with normalized `./` tar members.
+- Derive the local WhatsApp account identity from incoming message recipients when current account metadata is absent, instead of mistaking remote Signal session peers for local accounts.
 
 ### Changed
 
