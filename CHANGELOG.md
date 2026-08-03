@@ -9,6 +9,7 @@
 ### Changed
 
 - Rewrite the README to the house standard and move detailed commands, backups, data model, and release guidance into `docs/`.
+- Update CrawlKit to v0.14.5 and refresh the test-only pprof dependency.
 
 ## [0.3.5] - 2026-08-02
 
