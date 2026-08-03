@@ -534,10 +534,21 @@ insert into ZWAAXOLOTLSESSION values ('legacy-peer@s.whatsapp.net');`)
 	if _, err := archive.DB().ExecContext(ctx, `update sync_state set value=? where key='merge_account_identity'`, legacyIdentity); err != nil {
 		t.Fatal(err)
 	}
+	axolotlDB, err = sql.Open("sqlite", filepath.Join(source, axolotlDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, axolotlDB, `insert into ZWAZMDACCOUNT values (1, 'fixture-owner@s.whatsapp.net', 'fixture-owner@s.whatsapp.net')`)
+	if err := axolotlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	stats, err = Import(ctx, archive, source)
 	if err != nil {
-		t.Fatalf("legacy binding upgrade: %v", err)
+		t.Fatalf("legacy binding upgrade after metadata appears: %v", err)
+	}
+	if len(stats.LegacyAccountIDs) != 1 || stats.LegacyAccountIDs[0] != legacyIdentity {
+		t.Fatalf("metadata transition legacy candidates = %v, want %q", stats.LegacyAccountIDs, legacyIdentity)
 	}
 	var binding string
 	if err := archive.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&binding); err != nil || binding != stats.AccountIdentity {

@@ -253,15 +253,13 @@ func readAccountIdentity(ctx context.Context, axolotlDBPath, chatDBPath string) 
 				return "", nil, err
 			}
 		}
-		if len(metadataIDs) == 0 {
-			for _, table := range []string{"ZWAAXOLOTLIDENTITY", "ZWAAXOLOTLSESSION", "ZWASENDERKEY"} {
-				ids, err := accountIDs(ctx, db, table, "ZACCOUNTJIDSTRING")
-				if err != nil {
-					return "", nil, err
-				}
-				for id := range ids {
-					legacyIDs[id] = struct{}{}
-				}
+		for _, table := range []string{"ZWAAXOLOTLIDENTITY", "ZWAAXOLOTLSESSION", "ZWASENDERKEY"} {
+			ids, err := accountIDs(ctx, db, table, "ZACCOUNTJIDSTRING")
+			if err != nil {
+				return "", nil, err
+			}
+			for id := range ids {
+				legacyIDs[id] = struct{}{}
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -284,7 +282,7 @@ func readAccountIdentity(ctx context.Context, axolotlDBPath, chatDBPath string) 
 		return "", nil, errors.New("WhatsApp account metadata does not match the imported message store")
 	}
 	if metadataIdentity != "" {
-		return metadataIdentity, nil, nil
+		return metadataIdentity, accountFingerprints(legacyIDs), nil
 	}
 	return messageIdentity, accountFingerprints(legacyIDs), nil
 }
