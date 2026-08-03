@@ -5,6 +5,8 @@
 ### Fixed
 
 - Verify unified release archives with normalized `./` tar members.
+- Import current single-account WhatsApp Desktop stores when the dedicated account table is empty, while preserving account-mixing safeguards (#54, thanks @vincentkoc).
+
 ### Changed
 
 - Rewrite the README to the house standard and move detailed commands, backups, data model, and release guidance into `docs/`.
