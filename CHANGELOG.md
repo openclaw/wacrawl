@@ -6,6 +6,10 @@
 
 - Verify unified release archives with normalized `./` tar members.
 
+### Changed
+
+- Rewrite the README to the house standard and move detailed commands, backups, data model, and release guidance into `docs/`.
+
 ## [0.3.5] - 2026-08-02
 
 ### Highlights
