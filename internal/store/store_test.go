@@ -462,6 +462,40 @@ func TestMergeAdoptsEarlyStoreUUIDAccountBinding(t *testing.T) {
 	}
 }
 
+func TestMergeMigratesLegacyAccountBindingWithEventContinuity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "legacy-account.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	now := time.Date(2026, 8, 3, 4, 30, 0, 0, time.UTC)
+	existing := Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", Timestamp: now, Text: "body", RawType: 0}
+	base := ImportStats{SourceIdentity: "/source", SourceStoreIdentity: "wa-store:fixture", AccountIdentity: "wa-account:legacy", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, base, nil, []Chat{{JID: "chat", Kind: "dm"}}, nil, nil, []Message{existing}); err != nil {
+		t.Fatal(err)
+	}
+	upgrade := ImportStats{
+		SourceIdentity:      base.SourceIdentity,
+		SourceStoreIdentity: base.SourceStoreIdentity,
+		AccountIdentity:     "wa-account:recipient",
+		LegacyAccountIDs:    []string{base.AccountIdentity},
+		FinishedAt:          now.Add(time.Minute),
+		Messages:            1,
+	}
+	disjoint := Message{SourcePK: 2, ChatJID: "chat", MessageID: "two", Timestamp: now, Text: "other", RawType: 0}
+	if err := st.ValidateImport(ctx, upgrade, []Message{disjoint}, false); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("legacy candidate without event continuity error = %v", err)
+	}
+	if err := st.MergeAll(ctx, upgrade, nil, nil, nil, nil, []Message{existing}); err != nil {
+		t.Fatalf("legacy account migration: %v", err)
+	}
+	var binding string
+	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&binding); err != nil || binding != upgrade.AccountIdentity {
+		t.Fatalf("migrated account binding = %q, %v", binding, err)
+	}
+}
+
 func TestStrongSourceIdentityRequiresAccountContinuity(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "continuity.db"))
