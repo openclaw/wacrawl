@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.6] - Unreleased
+## [0.3.6] - 2026-08-03
 
 ### Fixed
 
@@ -11,6 +11,8 @@
 
 - Rewrite the README to the house standard and move detailed commands, backups, data model, and release guidance into `docs/`.
 - Update CrawlKit to v0.14.5 and refresh the test-only pprof dependency.
+- Add pinned CodeQL analysis and weekly Dependabot updates for Go modules and GitHub Actions.
+- Keep the shared release workflow on its moving `v1` line while suppressing routine minor and patch update churn and preserving major-version review.
 
 ## [0.3.5] - 2026-08-02
 
