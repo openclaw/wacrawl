@@ -249,7 +249,7 @@ func TestReadAccountIdentity(t *testing.T) {
 	createFixtureDBs(t, source)
 	path := filepath.Join(source, axolotlDBName)
 	chatPath := filepath.Join(source, chatDBName)
-	before, err := readAccountIdentity(ctx, path, chatPath)
+	before, _, err := readAccountIdentity(ctx, path, chatPath)
 	if err != nil || !strings.HasPrefix(before, "wa-account:") {
 		t.Fatalf("account identity = %q, %v", before, err)
 	}
@@ -261,11 +261,11 @@ func TestReadAccountIdentity(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	after, err := readAccountIdentity(ctx, path, chatPath)
+	after, _, err := readAccountIdentity(ctx, path, chatPath)
 	if err != nil || after == before || !strings.HasPrefix(after, "wa-account:") {
 		t.Fatalf("account switch identity: before=%q after=%q err=%v", before, after, err)
 	}
-	if identity, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), filepath.Join(t.TempDir(), chatDBName)); err != nil || identity != "" {
+	if identity, _, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), filepath.Join(t.TempDir(), chatDBName)); err != nil || identity != "" {
 		t.Fatalf("missing account database identity = %q, %v", identity, err)
 	}
 
@@ -279,7 +279,7 @@ func TestReadAccountIdentity(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readAccountIdentity(ctx, filepath.Join(ambiguous, axolotlDBName), filepath.Join(ambiguous, chatDBName)); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") || strings.Contains(err.Error(), "--restore") {
+	if _, _, err := readAccountIdentity(ctx, filepath.Join(ambiguous, axolotlDBName), filepath.Join(ambiguous, chatDBName)); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") || strings.Contains(err.Error(), "--restore") {
 		t.Fatalf("ambiguous account identity error = %v", err)
 	}
 }
@@ -296,7 +296,7 @@ func TestReadAccountIdentityFallbacks(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		identity, err := readAccountIdentity(ctx, path, filepath.Join(t.TempDir(), chatDBName))
+		identity, _, err := readAccountIdentity(ctx, path, filepath.Join(t.TempDir(), chatDBName))
 		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
 			t.Fatalf("ZMD account fallback = %q, %v", identity, err)
 		}
@@ -332,9 +332,12 @@ insert into ZWAMESSAGE values (1, 'remote@s.whatsapp.net');`)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		identity, err := readAccountIdentity(ctx, axolotlPath, chatPath)
+		identity, legacy, err := readAccountIdentity(ctx, axolotlPath, chatPath)
 		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
 			t.Fatalf("message recipient fallback = %q, %v", identity, err)
+		}
+		if len(legacy) != 3 {
+			t.Fatalf("legacy account candidates = %d, want 3", len(legacy))
 		}
 	})
 	t.Run("message recipients are ambiguous", func(t *testing.T) {
@@ -350,7 +353,7 @@ insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net');`)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), chatPath); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") {
+		if _, _, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), chatPath); err == nil || !strings.Contains(err.Error(), "multiple WhatsApp account identities") {
 			t.Fatalf("ambiguous message recipients error = %v", err)
 		}
 	})
@@ -374,7 +377,7 @@ insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net');`)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := readAccountIdentity(ctx, axolotlPath, chatPath); err == nil || !strings.Contains(err.Error(), "does not match") {
+		if _, _, err := readAccountIdentity(ctx, axolotlPath, chatPath); err == nil || !strings.Contains(err.Error(), "does not match") {
 			t.Fatalf("account metadata mismatch error = %v", err)
 		}
 	})
@@ -388,7 +391,7 @@ insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net');`)
 		if err := db.Close(); err != nil {
 			t.Fatal(err)
 		}
-		identity, err := readAccountIdentity(ctx, path, filepath.Join(t.TempDir(), chatDBName))
+		identity, _, err := readAccountIdentity(ctx, path, filepath.Join(t.TempDir(), chatDBName))
 		if err != nil || identity != "" {
 			t.Fatalf("empty schema identity = %q, %v", identity, err)
 		}
@@ -487,6 +490,61 @@ func TestImportDesktopWithoutAccountIdentityCannotMergeNonemptyArchive(t *testin
 	}
 	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
 		t.Fatalf("adoption without account identity error = %v", err)
+	}
+}
+
+func TestImportDesktopMigratesLegacyAccountBinding(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `update ZWAMESSAGE set ZTOJID='fixture-owner@s.whatsapp.net' where ZISFROMME=0`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	axolotlDB, err := sql.Open("sqlite", filepath.Join(source, axolotlDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, axolotlDB, `
+delete from ZWAZMDACCOUNT;
+create table ZWAAXOLOTLSESSION (ZACCOUNTJIDSTRING varchar);
+insert into ZWAAXOLOTLSESSION values ('legacy-peer@s.whatsapp.net');`)
+	if err := axolotlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	stats, err := Import(ctx, archive, source)
+	if err != nil || stats.AccountIdentity == "" || len(stats.LegacyAccountIDs) != 1 {
+		t.Fatalf("initial import = %+v, %v", stats, err)
+	}
+	legacyIdentity := stats.LegacyAccountIDs[0]
+	if legacyIdentity == stats.AccountIdentity {
+		t.Fatal("legacy and recipient account identities unexpectedly match")
+	}
+	if _, err := archive.DB().ExecContext(ctx, `update sync_state set value=? where key='merge_account_identity'`, legacyIdentity); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err = Import(ctx, archive, source)
+	if err != nil {
+		t.Fatalf("legacy binding upgrade: %v", err)
+	}
+	var binding string
+	if err := archive.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&binding); err != nil || binding != stats.AccountIdentity {
+		t.Fatalf("migrated account binding = %q, want %q: %v", binding, stats.AccountIdentity, err)
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatalf("post-migration merge: %v", err)
 	}
 }
 

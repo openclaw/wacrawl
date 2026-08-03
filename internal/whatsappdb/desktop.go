@@ -63,6 +63,7 @@ type Data struct {
 	MediaCount          int
 	SourceStoreIdentity string
 	AccountIdentity     string
+	LegacyAccountIDs    []string
 }
 
 type ImportOptions struct {
@@ -189,18 +190,19 @@ func Extract(ctx context.Context, snap Snapshot) (Data, error) {
 		return Data{}, err
 	}
 	chatDBPath := filepath.Join(snap.Root, chatDBName)
-	accountIdentity, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlDBName), chatDBPath)
+	accountIdentity, legacyAccountIDs, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlDBName), chatDBPath)
 	if err != nil {
 		return Data{}, err
 	}
-	accountIdentityBefore, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlBeforeDBName), chatDBPath)
+	accountIdentityBefore, legacyAccountIDsBefore, err := readAccountIdentity(ctx, filepath.Join(snap.Root, axolotlBeforeDBName), chatDBPath)
 	if err != nil {
 		return Data{}, err
 	}
 	if accountIdentity != accountIdentityBefore {
 		return Data{}, errors.New("WhatsApp account changed while the Desktop snapshot was being captured; retry the import")
 	}
-	return Data{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, MediaCount: mediaCount, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity}, nil
+	legacyAccountIDs = sharedIdentities(legacyAccountIDs, legacyAccountIDsBefore)
+	return Data{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, MediaCount: mediaCount, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity, LegacyAccountIDs: legacyAccountIDs}, nil
 }
 
 func readSourceIdentity(ctx context.Context, chatDBPath string) (string, error) {
@@ -231,48 +233,84 @@ func readSourceIdentity(ctx context.Context, chatDBPath string) (string, error) 
 	return fmt.Sprintf("wa-store:%x", fingerprint), nil
 }
 
-func readAccountIdentity(ctx context.Context, axolotlDBPath, chatDBPath string) (string, error) {
+func readAccountIdentity(ctx context.Context, axolotlDBPath, chatDBPath string) (string, []string, error) {
 	var metadataIDs map[string]struct{}
+	legacyIDs := make(map[string]struct{})
 	if _, err := os.Stat(axolotlDBPath); err == nil {
 		db, closeDB, err := openReadOnly(axolotlDBPath)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		defer closeDB()
 
 		metadataIDs, err = accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZUSERJIDSTRING")
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if len(metadataIDs) == 0 {
 			metadataIDs, err = accountIDs(ctx, db, "ZWAZMDACCOUNT", "ZACCOUNTJIDSTRING")
 			if err != nil {
-				return "", err
+				return "", nil, err
+			}
+		}
+		if len(metadataIDs) == 0 {
+			for _, table := range []string{"ZWAAXOLOTLIDENTITY", "ZWAAXOLOTLSESSION", "ZWASENDERKEY"} {
+				ids, err := accountIDs(ctx, db, table, "ZACCOUNTJIDSTRING")
+				if err != nil {
+					return "", nil, err
+				}
+				for id := range ids {
+					legacyIDs[id] = struct{}{}
+				}
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", err
+		return "", nil, err
 	}
 
 	messageIDs, err := incomingMessageAccountIDs(ctx, chatDBPath)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	metadataIdentity, err := accountFingerprint(metadataIDs)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	messageIdentity, err := accountFingerprint(messageIDs)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if metadataIdentity != "" && messageIdentity != "" && metadataIdentity != messageIdentity {
-		return "", errors.New("WhatsApp account metadata does not match the imported message store")
+		return "", nil, errors.New("WhatsApp account metadata does not match the imported message store")
 	}
 	if metadataIdentity != "" {
-		return metadataIdentity, nil
+		return metadataIdentity, nil, nil
 	}
-	return messageIdentity, nil
+	return messageIdentity, accountFingerprints(legacyIDs), nil
+}
+
+func accountFingerprints(ids map[string]struct{}) []string {
+	fingerprints := make([]string, 0, len(ids))
+	for id := range ids {
+		fingerprint := sha256.Sum256([]byte("account-jid\x00" + id))
+		fingerprints = append(fingerprints, fmt.Sprintf("wa-account:%x", fingerprint))
+	}
+	sort.Strings(fingerprints)
+	return fingerprints
+}
+
+func sharedIdentities(current, before []string) []string {
+	beforeSet := make(map[string]struct{}, len(before))
+	for _, identity := range before {
+		beforeSet[identity] = struct{}{}
+	}
+	shared := make([]string, 0, len(current))
+	for _, identity := range current {
+		if _, ok := beforeSet[identity]; ok {
+			shared = append(shared, identity)
+		}
+	}
+	return shared
 }
 
 func incomingMessageAccountIDs(ctx context.Context, chatDBPath string) (map[string]struct{}, error) {
@@ -389,6 +427,7 @@ func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions)
 	}
 	stats.SourceStoreIdentity = data.SourceStoreIdentity
 	stats.AccountIdentity = data.AccountIdentity
+	stats.LegacyAccountIDs = data.LegacyAccountIDs
 	stats.Chats = len(data.Chats)
 	stats.Contacts = len(data.Contacts)
 	stats.Groups = len(data.Groups)

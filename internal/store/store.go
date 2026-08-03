@@ -37,6 +37,7 @@ type ImportStats struct {
 	SourceIdentity      string    `json:"-"`
 	SourceStoreIdentity string    `json:"-"`
 	AccountIdentity     string    `json:"-"`
+	LegacyAccountIDs    []string  `json:"-"`
 	AdoptSource         bool      `json:"-"`
 	SourceSnapshotAt    time.Time `json:"-"`
 	SourceNewestMessage time.Time `json:"-"`
@@ -554,6 +555,7 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 	if existingStrong == "" && existingWeak != "" && weakSource != existingWeak {
 		return "", fmt.Errorf("archive is bound to WhatsApp source path %q, not %q; use a separate --db or import --restore", existingWeak, weakSource)
 	}
+	matchingMessages := 0
 	for _, message := range messages {
 		existing, found, err := messageBySourcePK(ctx, tx, message.SourcePK)
 		if err != nil {
@@ -561,6 +563,9 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 		}
 		if found && messageIdentityConflict(existing, message) {
 			return "", fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", message.SourcePK)
+		}
+		if found {
+			matchingMessages++
 		}
 	}
 	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
@@ -577,7 +582,14 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 		existingAccount = ""
 	}
 	if existingAccount != "" {
-		if accountIdentity == "" || existingAccount != accountIdentity {
+		legacyMatch := false
+		for _, candidate := range stats.LegacyAccountIDs {
+			if strings.TrimSpace(candidate) == existingAccount {
+				legacyMatch = true
+				break
+			}
+		}
+		if accountIdentity == "" || (existingAccount != accountIdentity && (!legacyMatch || matchingMessages == 0)) {
 			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
 		}
 	} else {
