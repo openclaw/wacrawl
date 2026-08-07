@@ -18,31 +18,79 @@ Clicking **Allow** does not persist for background processes. The consent this d
 
 ## The fix: Full Disk Access on a stable path
 
-Full Disk Access on the exact binary that does the reading suppresses the app-data check entirely. TCC identifies bare command-line binaries by **absolute path**, which creates one pitfall: the Homebrew Cellar path changes on every upgrade (`/opt/homebrew/Cellar/wacrawl/<version>/bin/wacrawl`), taking the grant with it.
+Full Disk Access on the exact binary that does the reading suppresses the app-data check. TCC identifies bare command-line binaries by **absolute path**, which creates one pitfall: the Homebrew Cellar path changes on every upgrade (`/opt/homebrew/Cellar/wacrawl/<version>/bin/wacrawl`), taking the grant with it.
 
-Instead, run the scheduled job from a copy at a path that never changes:
+Instead, run the scheduled job from a copy at a path that never changes. `cp -p` follows the Homebrew symlink and lands the real signed binary:
 
 ```bash
-mkdir -p ~/wacrawl-scheduled
-cp -p "$(brew --prefix)/Cellar/wacrawl/$(wacrawl --version | awk '{print $NF}')/bin/wacrawl" \
-      ~/wacrawl-scheduled/wacrawl
+mkdir -p "$HOME/wacrawl-scheduled"
+cp -p "$(brew --prefix)/bin/wacrawl" "$HOME/wacrawl-scheduled/wacrawl"
 ```
 
-Point your launchd job's `ProgramArguments` at `~/wacrawl-scheduled/wacrawl`, then add that file to **System Settings → Privacy & Security → Full Disk Access** (press <kbd>⌘⇧G</kbd> in the file dialog to type a path; pick a non-hidden folder so it is reachable there).
+Add that copy to **System Settings → Privacy & Security → Full Disk Access** (press <kbd>⌘⇧G</kbd> in the file dialog to type a path; a non-hidden folder like the one above is reachable there).
 
-After each `brew upgrade openclaw/tap/wacrawl`, refresh the copy:
+After each `brew upgrade openclaw/tap/wacrawl`, refresh the copy with the same command:
 
 ```bash
-cp -p "$(brew --prefix)/bin/wacrawl" ~/wacrawl-scheduled/wacrawl
+cp -p "$(brew --prefix)/bin/wacrawl" "$HOME/wacrawl-scheduled/wacrawl"
 ```
 
 Same path plus the same Developer ID signing identity means the Full Disk Access grant keeps validating — no new prompts.
 
 A side benefit: with Full Disk Access, macOS also skips per-file adjudication of the container's media directory, so imports that crawl for many minutes under the prompt regime complete in seconds.
 
+### Keep the grant narrow
+
+Full Disk Access is much broader than the WhatsApp container, so scope it deliberately:
+
+- Grant it to the dedicated copy only — not to `$(brew --prefix)/bin/wacrawl`, which general shell use and other tooling touch. The privileged binary then exists solely for the scheduled job.
+- Confirm what you granted is the signed release build: `codesign -dv "$HOME/wacrawl-scheduled/wacrawl"` should report `Identifier=org.openclaw.wacrawl` and `TeamIdentifier=FWJYW4S8P8`.
+- If you stop scheduling imports, remove the entry from Full Disk Access and delete the copy.
+
+## The launchd job
+
+launchd performs **no shell expansion**: a `~` inside `ProgramArguments` is passed literally and the job dies before it starts. Use absolute paths. A minimal `~/Library/LaunchAgents/com.example.wacrawl-import.plist` (replace `USERNAME`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.example.wacrawl-import</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/USERNAME/wacrawl-scheduled/wacrawl</string>
+		<string>import</string>
+	</array>
+	<key>StartInterval</key>
+	<integer>7200</integer>
+	<key>StandardOutPath</key>
+	<string>/tmp/wacrawl-import.log</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/wacrawl-import.log</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
+```
+
+Load it once (shell expansion is fine here — this runs in your shell, not in launchd):
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.wacrawl-import.plist
+```
+
+Check the last run and exit status at any time:
+
+```bash
+launchctl print gui/$(id -u)/com.example.wacrawl-import
+tail /tmp/wacrawl-import.log
+```
+
 ## If the job dies with OS_REASON_CODESIGNING
 
-launchd records a lightweight code requirement for a job's binary when the job is registered. If the binary's signing *identity* later changes at the same path (for example, replacing a pre-0.3.6 ad-hoc build with a current Developer ID release), the kernel kills the new binary at spawn. `launchctl print gui/$UID/<label>` shows:
+launchd records a lightweight code requirement for a job's binary when the job is registered. If the binary's signing *identity* later changes at the same path (for example, replacing a pre-0.3.6 ad-hoc build with a current Developer ID release), the kernel kills the new binary at spawn. `launchctl print gui/$(id -u)/<label>` shows:
 
 ```text
 last exit reason = OS_REASON_CODESIGNING
@@ -51,8 +99,8 @@ last exit reason = OS_REASON_CODESIGNING
 Re-register the job once and it clears:
 
 ```bash
-launchctl bootout gui/$UID/<label>
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/<label>.plist
+launchctl bootout gui/$(id -u)/com.example.wacrawl-import
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.wacrawl-import.plist
 ```
 
 Routine upgrades that keep the same signing identity do not trip this.
