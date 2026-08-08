@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	filippo.io/age v1.3.1
-	modernc.org/sqlite v1.55.0
+	modernc.org/sqlite v1.56.0
 )
 
 require (
@@ -17,7 +17,6 @@ require (
 require (
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
