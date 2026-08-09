@@ -5,6 +5,8 @@
 ### Changed
 
 - Document the least-privilege Full Disk Access setup for unattended macOS imports (#61, thanks @ss251).
+- Update CrawlKit to v0.14.6 and modernc SQLite to v1.56.0, including its journal-rollback corruption fix.
+- Update CodeQL analysis to v4.37.6.
 
 ## [0.3.6] - 2026-08-03
 
