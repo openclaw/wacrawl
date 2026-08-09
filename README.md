@@ -80,6 +80,8 @@ wacrawl --json --sync never contacts export
 
 See the [command reference](docs/commands.md) for filters, sync modes, SQL constraints, and every subcommand.
 
+Running imports on a launchd or cron schedule? macOS prompts "would like to access data from other apps" on every background run, and Allow does not persist. The [scheduled imports guide](docs/scheduled-imports.md) covers the Full Disk Access setup that makes unattended imports work.
+
 ## Encrypted backups
 
 `wacrawl backup` exports deterministic JSONL shards, compresses them, and encrypts them to one or more X25519 age recipients before Git sees the data. Copied media can travel in content-deduplicated encrypted blobs, and restores verify hashes and cross-table references before replacing the archive.
@@ -121,6 +123,7 @@ Run `wacrawl help <command>` or open the [full command reference](docs/commands.
 ## Documentation
 
 - [Commands, filters, paths, and sync behavior](docs/commands.md)
+- [Scheduled imports on macOS and the TCC prompt loop](docs/scheduled-imports.md)
 - [Encrypted backups, recovery, and threat model](docs/backups.md)
 - [Archive identities and data model](docs/data-model.md)
 - [Release process](docs/releasing.md)

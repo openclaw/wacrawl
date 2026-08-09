@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Document the least-privilege Full Disk Access setup for unattended macOS imports (#61, thanks @ss251).
+
 ## [0.3.6] - 2026-08-03
 
 ### Fixed
