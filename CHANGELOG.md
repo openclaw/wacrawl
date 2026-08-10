@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Refresh modernc SQLite's transitive libc, memory, and C compiler runtime dependencies.
+
 ## [0.3.7] - 2026-08-08
 
 ### Changed

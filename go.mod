@@ -7,12 +7,7 @@ require (
 	modernc.org/sqlite v1.56.0
 )
 
-require (
-	c2sp.org/CCTV/age v0.0.0-20260605191406-1e3d2860d46e // indirect
-	golang.org/x/tools v0.48.0 // indirect
-	modernc.org/cc/v4 v4.29.2 // indirect
-	modernc.org/gc/v3 v3.1.5 // indirect
-)
+require c2sp.org/CCTV/age v0.0.0-20260605191406-1e3d2860d46e // indirect
 
 require (
 	filippo.io/hpke v0.4.0 // indirect
@@ -24,7 +19,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/crypto v0.54.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	modernc.org/libc v1.74.4 // indirect
+	modernc.org/libc v1.75.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.11.0 // indirect
+	modernc.org/memory v1.12.0 // indirect
 )
