@@ -313,6 +313,73 @@ func TestReplaceAllIsExplicitExactRestore(t *testing.T) {
 	}
 }
 
+func TestMergeAllPreservesMessageWhenWhatsAppReusesSourceRowForReaction(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "reaction-reuse.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 8, 3, 15, 52, 24, 0, time.UTC)
+	original := Message{
+		SourcePK: 42, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now,
+		Text: "original body", RawType: 0, MessageType: "text",
+	}
+	stats := ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, stats, nil, []Chat{{JID: original.ChatJID, Kind: "group"}}, nil, nil, []Message{original}); err != nil {
+		t.Fatal(err)
+	}
+
+	reaction := original
+	reaction.MessageID = "reaction-stanza"
+	reaction.Text = ""
+	reaction.RawType = 14
+	reaction.MessageType = "reaction"
+	reaction.MediaTitle = original.MessageID
+	reaction.SourceTextNull = true
+	stats.FinishedAt = now.Add(time.Minute)
+	if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{reaction}); err != nil {
+		t.Fatalf("reaction source-row reuse: %v", err)
+	}
+
+	stored, err := st.MessageBySourcePK(ctx, original.SourcePK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.MessageID != original.MessageID || stored.Text != original.Text || stored.MessageType != original.MessageType {
+		t.Fatalf("reaction replaced original message: %+v", stored)
+	}
+}
+
+func TestMergeAllRejectsReactionSourceRowCollisionWithoutOriginalTarget(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "unrelated-reaction.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 8, 3, 15, 52, 24, 0, time.UTC)
+	original := Message{SourcePK: 42, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now, Text: "original body", RawType: 0}
+	stats := ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, stats, nil, []Chat{{JID: original.ChatJID, Kind: "group"}}, nil, nil, []Message{original}); err != nil {
+		t.Fatal(err)
+	}
+
+	unrelated := original
+	unrelated.MessageID = "reaction-stanza"
+	unrelated.Text = ""
+	unrelated.RawType = 14
+	unrelated.MessageType = "reaction"
+	unrelated.MediaTitle = "another-stanza"
+	unrelated.SourceTextNull = true
+	stats.FinishedAt = now.Add(time.Minute)
+	if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{unrelated}); err == nil || !strings.Contains(err.Error(), "different event") {
+		t.Fatalf("unrelated reaction collision error = %v", err)
+	}
+}
+
 func TestMergeAllRejectsDifferentSourceAndIdentityCollision(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "identity.db"))
@@ -493,6 +560,37 @@ func TestMergeMigratesLegacyAccountBindingWithEventContinuity(t *testing.T) {
 	var binding string
 	if err := st.DB().QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&binding); err != nil || binding != upgrade.AccountIdentity {
 		t.Fatalf("migrated account binding = %q, %v", binding, err)
+	}
+}
+
+func TestMergeRejectsLegacyAccountMigrationWhenOnlyOverlapIsReusedReactionRow(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "reaction-account-continuity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 8, 3, 15, 52, 24, 0, time.UTC)
+	existing := Message{SourcePK: 42, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now, Text: "body", RawType: 0}
+	base := ImportStats{SourceIdentity: "/source", SourceStoreIdentity: "wa-store:fixture", AccountIdentity: "wa-account:legacy", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, base, nil, []Chat{{JID: existing.ChatJID, Kind: "group"}}, nil, nil, []Message{existing}); err != nil {
+		t.Fatal(err)
+	}
+
+	reaction := existing
+	reaction.MessageID = "reaction-stanza"
+	reaction.Text = ""
+	reaction.RawType = 14
+	reaction.MessageType = "reaction"
+	reaction.MediaTitle = existing.MessageID
+	reaction.SourceTextNull = true
+	upgrade := base
+	upgrade.AccountIdentity = "wa-account:recipient"
+	upgrade.LegacyAccountIDs = []string{base.AccountIdentity}
+	upgrade.FinishedAt = now.Add(time.Minute)
+	if err := st.ValidateImport(ctx, upgrade, []Message{reaction}, false); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("reused reaction row established account continuity: %v", err)
 	}
 }
 

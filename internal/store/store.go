@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	schemaVersion     = 2
-	maxJSONUnixSecond = 253402300799 // 9999-12-31T23:59:59Z, the largest time.Time JSON can marshal.
+	schemaVersion           = 2
+	whatsappReactionRawType = 14
+	maxJSONUnixSecond       = 253402300799 // 9999-12-31T23:59:59Z, the largest time.Time JSON can marshal.
 
 	messageSelectColumns = `source_pk, event_id, chat_jid, coalesce(chat_name,'') as chat_name, msg_id, coalesce(sender_jid,'') as sender_jid, coalesce(sender_name,'') as sender_name, ts, from_me, coalesce(text,'') as text, raw_type, coalesce(message_type,'') as message_type, coalesce(media_type,'') as media_type, coalesce(media_title,'') as media_title, coalesce(media_path,'') as media_path, coalesce(media_url,'') as media_url, coalesce(media_size,0) as media_size, starred, coalesce(deleted_at,0) as deleted_at, coalesce(deletion_source,'') as deletion_source, coalesce(deletion_reason,'') as deletion_reason, last_seen_at, '' as snippet`
 	messageScanColumns   = `source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, deleted_at, deletion_source, deletion_reason, last_seen_at, snippet`
@@ -561,10 +562,11 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 		if err != nil {
 			return "", err
 		}
-		if found && messageIdentityConflict(existing, message) {
+		reusedByReaction := found && reactionReusesSourceRow(existing, message)
+		if found && messageIdentityConflict(existing, message) && !reusedByReaction {
 			return "", fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", message.SourcePK)
 		}
-		if found {
+		if found && !reusedByReaction {
 			matchingMessages++
 		}
 	}
@@ -811,6 +813,9 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 		return err
 	}
 	if found {
+		if reactionReusesSourceRow(existing, m) {
+			return nil
+		}
 		if messageIdentityConflict(existing, m) {
 			return fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", m.SourcePK)
 		}
@@ -878,6 +883,17 @@ func messageHasPayload(message Message) bool {
 
 func messageIdentityConflict(existing, incoming Message) bool {
 	return existing.ChatJID != incoming.ChatJID || existing.MessageID != incoming.MessageID || existing.FromMe != incoming.FromMe || messageUnix(existing) != messageUnix(incoming)
+}
+
+func reactionReusesSourceRow(existing, incoming Message) bool {
+	// WhatsApp can reuse a deleted message's Core Data row for a reaction that
+	// points back to that message. Keep the archived event instead of replacing it.
+	return incoming.RawType == whatsappReactionRawType &&
+		incoming.SourceTextNull &&
+		incoming.MediaTitle == existing.MessageID &&
+		existing.ChatJID == incoming.ChatJID &&
+		existing.FromMe == incoming.FromMe &&
+		messageUnix(existing) == messageUnix(incoming)
 }
 
 func tombstoneSubordinates(ctx context.Context, tx *sql.Tx, observedAt time.Time) error {
