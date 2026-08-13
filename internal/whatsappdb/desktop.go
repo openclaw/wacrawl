@@ -847,6 +847,7 @@ order by m.ZMESSAGEDATE asc, m.Z_PK asc`)
 		if err := rows.Scan(&m.SourcePK, &m.ChatJID, &m.ChatName, &m.MessageID, &fromMe, &msgDate, &text, &m.RawType, &starred, &fromJID, &toJID, &pushName, &memberJID, &memberName, &memberFirst, &mediaPath, &mediaURL, &mediaTitle, &vcardName, &m.MediaSize); err != nil {
 			return nil, 0, err
 		}
+		m.SourceRowPK = m.SourcePK
 		if m.ChatJID == "" || m.MessageID == "" {
 			continue
 		}

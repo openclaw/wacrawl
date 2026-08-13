@@ -64,6 +64,7 @@ create table if not exists group_participants (
 create table if not exists messages (
 	rowid integer primary key autoincrement,
 	source_pk integer not null unique,
+	source_row_pk integer not null default 0,
 	event_id text not null,
 	chat_jid text not null,
 	chat_name text,

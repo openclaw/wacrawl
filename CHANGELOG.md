@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Preserve both the original message and reaction when WhatsApp reuses a Core Data message row, with stable identities across repeat imports (#68).
+
 ### Changed
 
 - Refresh modernc SQLite's transitive libc, memory, and C compiler runtime dependencies.

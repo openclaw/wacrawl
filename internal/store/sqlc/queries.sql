@@ -173,8 +173,8 @@ insert into group_participants(group_jid, user_jid, contact_name, first_name, is
 values(sqlc.arg(group_jid), sqlc.arg(user_jid), sqlc.arg(contact_name), sqlc.arg(first_name), sqlc.arg(is_admin), sqlc.arg(is_active));
 
 -- name: InsertMessage :exec
-insert into messages(source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
-values(sqlc.arg(source_pk), sqlc.arg(event_id), sqlc.arg(chat_jid), sqlc.arg(chat_name), sqlc.arg(msg_id), sqlc.arg(sender_jid), sqlc.arg(sender_name), sqlc.arg(ts), sqlc.arg(from_me), sqlc.arg(text), sqlc.arg(raw_type), sqlc.arg(message_type), sqlc.arg(media_type), sqlc.arg(media_title), sqlc.arg(media_path), sqlc.arg(media_url), sqlc.arg(media_size), sqlc.arg(starred));
+insert into messages(source_pk, source_row_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
+values(sqlc.arg(source_pk), sqlc.arg(source_row_pk), sqlc.arg(event_id), sqlc.arg(chat_jid), sqlc.arg(chat_name), sqlc.arg(msg_id), sqlc.arg(sender_jid), sqlc.arg(sender_name), sqlc.arg(ts), sqlc.arg(from_me), sqlc.arg(text), sqlc.arg(raw_type), sqlc.arg(message_type), sqlc.arg(media_type), sqlc.arg(media_title), sqlc.arg(media_path), sqlc.arg(media_url), sqlc.arg(media_size), sqlc.arg(starred));
 
 -- name: InsertMessageFTS :exec
 insert into messages_fts(rowid, text, chat, sender, media)

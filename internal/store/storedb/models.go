@@ -68,6 +68,7 @@ type GroupParticipant struct {
 type Message struct {
 	Rowid          int64
 	SourcePk       int64
+	SourceRowPk    int64
 	EventID        string
 	ChatJid        string
 	ChatName       sql.NullString
