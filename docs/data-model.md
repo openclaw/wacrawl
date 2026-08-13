@@ -18,7 +18,8 @@ Axolotl.sqlite: ZWAZMDACCOUNT (account identity only)
 ## Identity and merge rules
 
 - WhatsApp timestamps are seconds since `2001-01-01T00:00:00Z`.
-- `ZWAMESSAGE.Z_PK` is stable inside one source archive and maps to `messages.event_id` as `wa:<source_pk>`.
+- `ZWAMESSAGE.Z_PK` is retained as `messages.source_row_pk`. Ordinary rows use the same value for the unique archive `source_pk` and map to `messages.event_id` as `wa:<source_pk>`.
+- When WhatsApp reuses an archived message row for a reaction, the original keeps its identity and the reaction receives a deterministic JSON-safe high-range `source_pk` plus a `wa-reaction:<source_row_pk>:<digest>` event ID. The digest covers the chat, reaction stanza, and reaction target, so repeat imports deduplicate without discarding either event; the raw reused row remains available in `source_row_pk` as provenance.
 - Routine merges bind the archive to the canonical source path, a hashed CoreData store fingerprint, and a separately hashed account JID. Event overlap is not an account-identity substitute.
 - Legacy archives without verified account binding require one explicit `--adopt-source`. Use a separate `--db` for another account or `--restore` for intentional source replacement.
 - `ZSTANZAID` is not unique enough to identify archived messages.

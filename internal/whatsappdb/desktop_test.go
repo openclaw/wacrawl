@@ -73,6 +73,80 @@ func TestImportDesktopCoreDataShape(t *testing.T) {
 	}
 }
 
+func TestImportDesktopPreservesReusedRowReactionAcrossReimport(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "wacrawl.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `
+insert into ZWAMEDIAITEM values (2, 1, '', '', 'dm-in', '', 0);
+update ZWAMESSAGE set ZMEDIAITEM=2, ZSTANZAID='reaction-stanza', ZISFROMME=1, ZMESSAGEDATE=700000300, ZTEXT=null, ZMESSAGETYPE=14, ZFROMJID='', ZTOJID='111@s.whatsapp.net', ZPUSHNAME='' where Z_PK=1;`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var reactionPK int64
+	var reactionEventID string
+	for attempt := 1; attempt <= 2; attempt++ {
+		if _, err := Import(ctx, archive, source); err != nil {
+			t.Fatalf("reaction import attempt %d: %v", attempt, err)
+		}
+		messages, err := archive.Messages(ctx, store.MessageFilter{ChatJID: "111@s.whatsapp.net", Limit: 10, Asc: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(messages) != 4 {
+			t.Fatalf("attempt %d direct messages = %d, want three originals plus reaction: %+v", attempt, len(messages), messages)
+		}
+		var original, reaction *store.Message
+		for i := range messages {
+			switch messages[i].MessageID {
+			case "dm-in":
+				if messages[i].SourcePK == 1 {
+					original = &messages[i]
+				}
+			case "reaction-stanza":
+				reaction = &messages[i]
+			}
+		}
+		if original == nil || reaction == nil {
+			t.Fatalf("attempt %d missing original or reaction: %+v", attempt, messages)
+		}
+		if original.Text != "hello" || original.EventID != "wa:1" || original.SourceRowPK != 1 {
+			t.Fatalf("attempt %d original changed: %+v", attempt, *original)
+		}
+		if reaction.RawType != 14 || reaction.SourceRowPK != 1 || reaction.MediaTitle != "dm-in" || !reaction.FromMe || !reaction.Timestamp.Equal(time.Unix(appleEpoch+700000300, 0).UTC()) {
+			t.Fatalf("attempt %d reaction fields/provenance = %+v", attempt, *reaction)
+		}
+		if attempt == 1 {
+			reactionPK = reaction.SourcePK
+			reactionEventID = reaction.EventID
+		} else if reaction.SourcePK != reactionPK || reaction.EventID != reactionEventID {
+			t.Fatalf("reaction identity changed across import: first=(%d,%q) second=(%d,%q)", reactionPK, reactionEventID, reaction.SourcePK, reaction.EventID)
+		}
+	}
+
+	status, err := archive.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Messages != 5 || status.MessageRevisions != 0 {
+		t.Fatalf("reused reaction status = %+v", status)
+	}
+}
+
 func TestImportDesktopTurnsNullTextTransitionIntoTombstone(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()

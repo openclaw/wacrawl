@@ -548,12 +548,13 @@ func (q *Queries) InsertGroup(ctx context.Context, arg InsertGroupParams) error 
 }
 
 const insertMessage = `-- name: InsertMessage :exec
-insert into messages(source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
-values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+insert into messages(source_pk, source_row_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred)
+values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
 `
 
 type InsertMessageParams struct {
 	SourcePk    int64
+	SourceRowPk int64
 	EventID     string
 	ChatJid     string
 	ChatName    sql.NullString
@@ -576,6 +577,7 @@ type InsertMessageParams struct {
 func (q *Queries) InsertMessage(ctx context.Context, arg InsertMessageParams) error {
 	_, err := q.db.ExecContext(ctx, insertMessage,
 		arg.SourcePk,
+		arg.SourceRowPk,
 		arg.EventID,
 		arg.ChatJid,
 		arg.ChatName,

@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,11 +21,15 @@ import (
 )
 
 const (
-	schemaVersion     = 2
-	maxJSONUnixSecond = 253402300799 // 9999-12-31T23:59:59Z, the largest time.Time JSON can marshal.
+	schemaVersion           = 3
+	whatsappReactionRawType = 14
+	// Keep synthetic keys in [2^52, 2^53) so they remain distinguishable from
+	// practical Core Data row IDs and exactly representable in web JSON.
+	syntheticMessagePKBoundary = int64(1 << 52)
+	maxJSONUnixSecond          = 253402300799 // 9999-12-31T23:59:59Z, the largest time.Time JSON can marshal.
 
-	messageSelectColumns = `source_pk, event_id, chat_jid, coalesce(chat_name,'') as chat_name, msg_id, coalesce(sender_jid,'') as sender_jid, coalesce(sender_name,'') as sender_name, ts, from_me, coalesce(text,'') as text, raw_type, coalesce(message_type,'') as message_type, coalesce(media_type,'') as media_type, coalesce(media_title,'') as media_title, coalesce(media_path,'') as media_path, coalesce(media_url,'') as media_url, coalesce(media_size,0) as media_size, starred, coalesce(deleted_at,0) as deleted_at, coalesce(deletion_source,'') as deletion_source, coalesce(deletion_reason,'') as deletion_reason, last_seen_at, '' as snippet`
-	messageScanColumns   = `source_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, deleted_at, deletion_source, deletion_reason, last_seen_at, snippet`
+	messageSelectColumns = `source_pk, source_row_pk, event_id, chat_jid, coalesce(chat_name,'') as chat_name, msg_id, coalesce(sender_jid,'') as sender_jid, coalesce(sender_name,'') as sender_name, ts, from_me, coalesce(text,'') as text, raw_type, coalesce(message_type,'') as message_type, coalesce(media_type,'') as media_type, coalesce(media_title,'') as media_title, coalesce(media_path,'') as media_path, coalesce(media_url,'') as media_url, coalesce(media_size,0) as media_size, starred, coalesce(deleted_at,0) as deleted_at, coalesce(deletion_source,'') as deletion_source, coalesce(deletion_reason,'') as deletion_reason, last_seen_at, '' as snippet`
+	messageScanColumns   = `source_pk, source_row_pk, event_id, chat_jid, chat_name, msg_id, sender_jid, sender_name, ts, from_me, text, raw_type, message_type, media_type, media_title, media_path, media_url, media_size, starred, deleted_at, deletion_source, deletion_reason, last_seen_at, snippet`
 )
 
 type Store struct {
@@ -146,6 +152,7 @@ type GroupParticipant struct {
 type Message struct {
 	Tombstone
 	SourcePK       int64     `json:"source_pk"`
+	SourceRowPK    int64     `json:"source_row_pk"`
 	EventID        string    `json:"event_id"`
 	ChatJID        string    `json:"chat_jid"`
 	ChatName       string    `json:"chat_name,omitempty"`
@@ -280,6 +287,12 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := ensureColumn(ctx, tx, "messages", "event_id", "text"); err != nil {
 		return err
 	}
+	if err := ensureColumn(ctx, tx, "messages", "source_row_pk", "integer not null default 0"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `update messages set source_row_pk = source_pk where source_row_pk = 0`); err != nil {
+		return fmt.Errorf("backfill message source-row provenance: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `update messages set event_id = printf('wa:%lld', source_pk) where event_id is null or trim(event_id) = ''`); err != nil {
 		return fmt.Errorf("backfill message event identity: %w", err)
 	}
@@ -355,6 +368,10 @@ func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages 
 		return err
 	}
 	defer rollback(tx)
+	messages, err = resolveReusedReactionIdentities(ctx, tx, restore, messages)
+	if err != nil {
+		return err
+	}
 	_, err = validateImportSource(ctx, tx, restore, stats, messages)
 	return err
 }
@@ -368,6 +385,10 @@ func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, 
 		return err
 	}
 	defer rollback(tx)
+	messages, err = resolveReusedReactionIdentities(ctx, tx, restore, messages)
+	if err != nil {
+		return err
+	}
 	mergeSource, err := validateImportSource(ctx, tx, restore, stats, messages)
 	if err != nil {
 		return err
@@ -799,11 +820,65 @@ func messageEventID(sourcePK int64) string {
 	return fmt.Sprintf("wa:%d", sourcePK)
 }
 
+func resolveReusedReactionIdentities(ctx context.Context, tx *sql.Tx, restore bool, messages []Message) ([]Message, error) {
+	resolved := append([]Message(nil), messages...)
+	for i := range resolved {
+		message := &resolved[i]
+		if message.SourceRowPK == 0 {
+			message.SourceRowPK = message.SourcePK
+		}
+		if restore {
+			continue
+		}
+		existing, found, err := messageBySourcePK(ctx, tx, message.SourcePK)
+		if err != nil {
+			return nil, err
+		}
+		if !found || !reactionReusesSourceRow(existing, *message) {
+			continue
+		}
+		eventID, sourcePK := reusedReactionIdentity(*message)
+		collision, collisionFound, err := messageBySourcePK(ctx, tx, sourcePK)
+		if err != nil {
+			return nil, err
+		}
+		if collisionFound && collision.EventID != eventID {
+			return nil, fmt.Errorf("synthetic reaction source_pk %d belongs to a different event", sourcePK)
+		}
+		message.SourcePK = sourcePK
+		message.EventID = eventID
+	}
+	if err := validateImportMessages(resolved); err != nil {
+		return nil, err
+	}
+	return resolved, nil
+}
+
+func reactionReusesSourceRow(existing, incoming Message) bool {
+	return incoming.RawType == whatsappReactionRawType &&
+		incoming.SourceTextNull &&
+		incoming.MessageID != "" &&
+		incoming.MessageID != existing.MessageID &&
+		incoming.MediaTitle == existing.MessageID &&
+		incoming.ChatJID == existing.ChatJID
+}
+
+func reusedReactionIdentity(message Message) (string, int64) {
+	seed := fmt.Sprintf("%d\x00%s\x00%s\x00%s", message.SourceRowPK, message.ChatJID, message.MessageID, message.MediaTitle)
+	digest := sha256.Sum256([]byte(seed))
+	eventID := fmt.Sprintf("wa-reaction:%d:%x", message.SourceRowPK, digest[:16])
+	sourcePK := syntheticMessagePKBoundary | int64(binary.BigEndian.Uint64(digest[:8])&uint64(syntheticMessagePKBoundary-1))
+	return eventID, sourcePK
+}
+
 func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.Time) error {
 	sourcePayloadCleared := m.SourceTextNull && m.RawType == 0 && m.MediaTitle == "" && m.MediaType == "" && m.MediaPath == "" && m.MediaURL == "" && m.DeletedAt.IsZero()
 	preserveExistingFTS := false
 	if m.EventID == "" {
 		m.EventID = messageEventID(m.SourcePK)
+	}
+	if m.SourceRowPK == 0 {
+		m.SourceRowPK = m.SourcePK
 	}
 	m.Tombstone = normalizedTombstone(m.Tombstone, observedAt)
 	existing, found, err := messageBySourcePK(ctx, tx, m.SourcePK)
@@ -842,11 +917,11 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `insert into messages(
-source_pk,event_id,chat_jid,chat_name,msg_id,sender_jid,sender_name,ts,from_me,text,
+source_pk,source_row_pk,event_id,chat_jid,chat_name,msg_id,sender_jid,sender_name,ts,from_me,text,
 raw_type,message_type,media_type,media_title,media_path,media_url,media_size,starred,
 deleted_at,deletion_source,deletion_reason,last_seen_at)
-values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-on conflict(source_pk) do update set event_id=excluded.event_id, chat_jid=excluded.chat_jid,
+values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+on conflict(source_pk) do update set source_row_pk=excluded.source_row_pk, event_id=excluded.event_id, chat_jid=excluded.chat_jid,
 chat_name=excluded.chat_name, msg_id=excluded.msg_id, sender_jid=excluded.sender_jid,
 sender_name=excluded.sender_name, ts=excluded.ts, from_me=excluded.from_me, text=excluded.text,
 raw_type=excluded.raw_type, message_type=excluded.message_type, media_type=excluded.media_type,
@@ -854,7 +929,7 @@ media_title=excluded.media_title, media_path=excluded.media_path, media_url=excl
 media_size=excluded.media_size, starred=excluded.starred, deleted_at=excluded.deleted_at,
 deletion_source=excluded.deletion_source, deletion_reason=excluded.deletion_reason,
 last_seen_at=excluded.last_seen_at`,
-		m.SourcePK, m.EventID, m.ChatJID, m.ChatName, m.MessageID, m.SenderJID, m.SenderName, messageUnix(m), boolInt(m.FromMe), m.Text,
+		m.SourcePK, m.SourceRowPK, m.EventID, m.ChatJID, m.ChatName, m.MessageID, m.SenderJID, m.SenderName, messageUnix(m), boolInt(m.FromMe), m.Text,
 		m.RawType, m.MessageType, m.MediaType, m.MediaTitle, m.MediaPath, m.MediaURL, m.MediaSize, boolInt(m.Starred),
 		nullableUnix(m.DeletedAt), nullableString(m.DeletionSource), nullableString(m.DeletionReason), unix(m.LastSeenAt)); err != nil {
 		return err
@@ -932,6 +1007,7 @@ where deleted_at is null and exists(select 1 from groups where groups.jid=group_
 func canonicalMessageJSON(m Message) (string, error) {
 	payload := struct {
 		SourcePK       int64  `json:"source_pk"`
+		SourceRowPK    int64  `json:"source_row_pk"`
 		EventID        string `json:"event_id"`
 		ChatJID        string `json:"chat_jid"`
 		ChatName       string `json:"chat_name,omitempty"`
@@ -953,7 +1029,7 @@ func canonicalMessageJSON(m Message) (string, error) {
 		DeletionSource string `json:"deletion_source,omitempty"`
 		DeletionReason string `json:"deletion_reason,omitempty"`
 	}{
-		SourcePK: m.SourcePK, EventID: m.EventID, ChatJID: m.ChatJID, ChatName: m.ChatName,
+		SourcePK: m.SourcePK, SourceRowPK: m.SourceRowPK, EventID: m.EventID, ChatJID: m.ChatJID, ChatName: m.ChatName,
 		MessageID: m.MessageID, SenderJID: m.SenderJID, SenderName: m.SenderName,
 		Timestamp: messageUnix(m), FromMe: m.FromMe, Text: m.Text, RawType: m.RawType,
 		MessageType: m.MessageType, MediaType: m.MediaType, MediaTitle: m.MediaTitle,
@@ -1179,7 +1255,7 @@ func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, er
 	if snippetEnd == "" {
 		snippetEnd = "]"
 	}
-	query := `select m.source_pk, m.event_id, m.chat_jid, coalesce(m.chat_name,''), m.msg_id, coalesce(m.sender_jid,''), coalesce(m.sender_name,''), m.ts, m.from_me, coalesce(m.text,''), m.raw_type, coalesce(m.message_type,''), coalesce(m.media_type,''), coalesce(m.media_title,''), coalesce(m.media_path,''), coalesce(m.media_url,''), coalesce(m.media_size,0), m.starred, coalesce(m.deleted_at,0), coalesce(m.deletion_source,''), coalesce(m.deletion_reason,''), m.last_seen_at, snippet(messages_fts, 0, ?, ?, '...', 12) from messages_fts f join messages m on m.rowid=f.rowid where messages_fts match ?`
+	query := `select m.source_pk, m.source_row_pk, m.event_id, m.chat_jid, coalesce(m.chat_name,''), m.msg_id, coalesce(m.sender_jid,''), coalesce(m.sender_name,''), m.ts, m.from_me, coalesce(m.text,''), m.raw_type, coalesce(m.message_type,''), coalesce(m.media_type,''), coalesce(m.media_title,''), coalesce(m.media_path,''), coalesce(m.media_url,''), coalesce(m.media_size,0), m.starred, coalesce(m.deleted_at,0), coalesce(m.deletion_source,''), coalesce(m.deletion_reason,''), m.last_seen_at, snippet(messages_fts, 0, ?, ?, '...', 12) from messages_fts f join messages m on m.rowid=f.rowid where messages_fts match ?`
 	args := []any{snippetStart, snippetEnd, ftsQuery}
 	query, args = applyMessageFilters(query, args, filter, true)
 	query += " order by bm25(messages_fts) limit ?"
@@ -1251,7 +1327,7 @@ func scanMessage(row messageScanner) (Message, error) {
 	var m Message
 	var ts, deletedAt, lastSeenAt int64
 	var fromMe, starred int
-	if err := row.Scan(&m.SourcePK, &m.EventID, &m.ChatJID, &m.ChatName, &m.MessageID, &m.SenderJID, &m.SenderName,
+	if err := row.Scan(&m.SourcePK, &m.SourceRowPK, &m.EventID, &m.ChatJID, &m.ChatName, &m.MessageID, &m.SenderJID, &m.SenderName,
 		&ts, &fromMe, &m.Text, &m.RawType, &m.MessageType, &m.MediaType, &m.MediaTitle, &m.MediaPath, &m.MediaURL,
 		&m.MediaSize, &starred, &deletedAt, &m.DeletionSource, &m.DeletionReason, &lastSeenAt, &m.Snippet); err != nil {
 		return Message{}, err

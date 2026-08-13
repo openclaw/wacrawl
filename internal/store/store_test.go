@@ -313,6 +313,172 @@ func TestReplaceAllIsExplicitExactRestore(t *testing.T) {
 	}
 }
 
+func TestMergeAllPreservesOriginalAndReusedRowReaction(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Message)
+	}{
+		{
+			name: "matching fields from issue fixture",
+			mutate: func(*Message) {
+			},
+		},
+		{
+			name: "realistic later opposite direction",
+			mutate: func(message *Message) {
+				message.Timestamp = message.Timestamp.Add(5 * time.Minute)
+				message.FromMe = true
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, err := Open(ctx, filepath.Join(t.TempDir(), "reaction-reuse.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = st.Close() }()
+
+			now := time.Date(2026, 8, 3, 15, 52, 24, 0, time.UTC)
+			original := Message{
+				SourcePK: 42, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now,
+				Text: "original body", RawType: 0, MessageType: "text",
+			}
+			stats := ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 1}
+			if err := st.MergeAll(ctx, stats, nil, []Chat{{JID: original.ChatJID, Kind: "group"}}, nil, nil, []Message{original}); err != nil {
+				t.Fatal(err)
+			}
+
+			reaction := original
+			reaction.MessageID = "reaction-stanza"
+			reaction.Text = ""
+			reaction.RawType = whatsappReactionRawType
+			reaction.MessageType = "reaction"
+			reaction.MediaTitle = original.MessageID
+			reaction.SourceTextNull = true
+			tt.mutate(&reaction)
+			stats.FinishedAt = now.Add(time.Minute)
+
+			var firstReactionPK int64
+			var firstEventID string
+			for attempt := 1; attempt <= 2; attempt++ {
+				stats.FinishedAt = stats.FinishedAt.Add(time.Minute)
+				if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{reaction}); err != nil {
+					t.Fatalf("reaction source-row reuse attempt %d: %v", attempt, err)
+				}
+
+				messages, err := st.Messages(ctx, MessageFilter{Limit: 10, Asc: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(messages) != 2 {
+					t.Fatalf("attempt %d stored %d messages, want original and reaction: %+v", attempt, len(messages), messages)
+				}
+				var storedOriginal, storedReaction *Message
+				for i := range messages {
+					switch messages[i].RawType {
+					case 0:
+						storedOriginal = &messages[i]
+					case whatsappReactionRawType:
+						storedReaction = &messages[i]
+					}
+				}
+				if storedOriginal == nil || storedReaction == nil {
+					t.Fatalf("attempt %d lost an event: %+v", attempt, messages)
+				}
+				if storedOriginal.SourcePK != original.SourcePK || storedOriginal.SourceRowPK != original.SourcePK || storedOriginal.EventID != "wa:42" || storedOriginal.MessageID != original.MessageID || storedOriginal.Text != original.Text {
+					t.Fatalf("attempt %d changed original: %+v", attempt, *storedOriginal)
+				}
+				if storedReaction.SourcePK < syntheticMessagePKBoundary || storedReaction.SourcePK >= 2*syntheticMessagePKBoundary || storedReaction.SourceRowPK != original.SourcePK || storedReaction.EventID == storedOriginal.EventID || storedReaction.MessageID != reaction.MessageID || storedReaction.MediaTitle != original.MessageID || !storedReaction.Timestamp.Equal(reaction.Timestamp) || storedReaction.FromMe != reaction.FromMe {
+					t.Fatalf("attempt %d reaction identity/provenance = %+v", attempt, *storedReaction)
+				}
+				if attempt == 1 {
+					firstReactionPK = storedReaction.SourcePK
+					firstEventID = storedReaction.EventID
+				} else if storedReaction.SourcePK != firstReactionPK || storedReaction.EventID != firstEventID {
+					t.Fatalf("re-import changed reaction identity: first=(%d,%q) second=(%d,%q)", firstReactionPK, firstEventID, storedReaction.SourcePK, storedReaction.EventID)
+				}
+			}
+
+			var revisions int
+			if err := st.DB().QueryRowContext(ctx, `select count(*) from message_revisions`).Scan(&revisions); err != nil {
+				t.Fatal(err)
+			}
+			if revisions != 0 {
+				t.Fatalf("idempotent reaction re-import created %d revisions", revisions)
+			}
+		})
+	}
+}
+
+func TestMergeAllRejectsUnrelatedReactionSourceRowCollision(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "unrelated-reaction.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 8, 3, 15, 52, 24, 0, time.UTC)
+	original := Message{SourcePK: 42, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now, Text: "original body", RawType: 0}
+	stats := ImportStats{SourceIdentity: "fixture-store", AccountIdentity: "fixture-account", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, stats, nil, []Chat{{JID: original.ChatJID, Kind: "group"}}, nil, nil, []Message{original}); err != nil {
+		t.Fatal(err)
+	}
+
+	unrelated := original
+	unrelated.MessageID = "reaction-stanza"
+	unrelated.Text = ""
+	unrelated.RawType = whatsappReactionRawType
+	unrelated.MessageType = "reaction"
+	unrelated.MediaTitle = "another-stanza"
+	unrelated.SourceTextNull = true
+	stats.FinishedAt = now.Add(time.Minute)
+	if err := st.MergeAll(ctx, stats, nil, nil, nil, nil, []Message{unrelated}); err == nil || !strings.Contains(err.Error(), "different event") {
+		t.Fatalf("unrelated reaction collision error = %v", err)
+	}
+	var messages int
+	if err := st.DB().QueryRowContext(ctx, `select count(*) from messages`).Scan(&messages); err != nil {
+		t.Fatal(err)
+	}
+	if messages != 1 {
+		t.Fatalf("failed collision changed archive row count to %d", messages)
+	}
+}
+
+func TestReusedReactionDoesNotEstablishLegacyAccountContinuity(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "reaction-account-continuity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	now := time.Date(2026, 8, 3, 15, 52, 24, 0, time.UTC)
+	original := Message{SourcePK: 42, ChatJID: "group@g.us", MessageID: "original-stanza", Timestamp: now, Text: "body", RawType: 0}
+	base := ImportStats{SourceIdentity: "/source", SourceStoreIdentity: "wa-store:fixture", AccountIdentity: "wa-account:legacy", FinishedAt: now, Messages: 1}
+	if err := st.MergeAll(ctx, base, nil, []Chat{{JID: original.ChatJID, Kind: "group"}}, nil, nil, []Message{original}); err != nil {
+		t.Fatal(err)
+	}
+
+	reaction := original
+	reaction.MessageID = "reaction-stanza"
+	reaction.Text = ""
+	reaction.RawType = whatsappReactionRawType
+	reaction.MessageType = "reaction"
+	reaction.MediaTitle = original.MessageID
+	reaction.SourceTextNull = true
+	upgrade := base
+	upgrade.AccountIdentity = "wa-account:recipient"
+	upgrade.LegacyAccountIDs = []string{base.AccountIdentity}
+	upgrade.FinishedAt = now.Add(time.Minute)
+	if err := st.ValidateImport(ctx, upgrade, []Message{reaction}, false); err == nil || !strings.Contains(err.Error(), "different WhatsApp account") {
+		t.Fatalf("reused reaction row established account continuity: %v", err)
+	}
+}
+
 func TestMergeAllRejectsDifferentSourceAndIdentityCollision(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "identity.db"))
@@ -642,11 +808,12 @@ pragma user_version=1;`
 	if err := st.DB().QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DB().QueryRowContext(ctx, `select rowid,event_id,(deleted_at is not null)+(deletion_source is not null)+(deletion_reason is not null) from messages where source_pk=7`).Scan(&migratedRowID, &eventID, &tombstones); err != nil {
+	var sourceRowPK int64
+	if err := st.DB().QueryRowContext(ctx, `select rowid,source_row_pk,event_id,(deleted_at is not null)+(deletion_source is not null)+(deletion_reason is not null) from messages where source_pk=7`).Scan(&migratedRowID, &sourceRowPK, &eventID, &tombstones); err != nil {
 		t.Fatal(err)
 	}
-	if version != schemaVersion || migratedRowID != rowID || eventID != "wa:7" || tombstones != 0 {
-		t.Fatalf("migration version=%d rowid=%d/%d event=%q tombstones=%d", version, migratedRowID, rowID, eventID, tombstones)
+	if version != schemaVersion || migratedRowID != rowID || sourceRowPK != 7 || eventID != "wa:7" || tombstones != 0 {
+		t.Fatalf("migration version=%d rowid=%d/%d source_row_pk=%d event=%q tombstones=%d", version, migratedRowID, rowID, sourceRowPK, eventID, tombstones)
 	}
 	status, err := st.Status(ctx)
 	if err != nil {
