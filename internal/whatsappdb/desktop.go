@@ -505,7 +505,7 @@ func copyArchiveMedia(messages []store.Message, sourceRoot, mediaRoot string) (i
 			return copied, missing, err
 		}
 		if err := copyMediaFile(src, dest); err != nil {
-			if os.IsNotExist(err) {
+			if os.IsNotExist(err) || errors.Is(err, errMediaNotDownloaded) {
 				missing++
 				seen[src] = result{missing: true}
 				continue
@@ -537,6 +537,12 @@ func archiveMediaPath(sourceRoot, mediaRoot, src string) (string, error) {
 	return cleanDest, nil
 }
 
+// mediaMaterialized reports whether a media file's bytes are already on disk.
+// Tests replace this to simulate macOS SF_DATALESS (iCloud) stubs.
+var mediaMaterialized = fileMaterialized
+
+var errMediaNotDownloaded = errors.New("media not downloaded locally")
+
 func copyMediaFile(src, dest string) error {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -544,6 +550,9 @@ func copyMediaFile(src, dest string) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("media source is not a regular file: %s", src)
+	}
+	if !mediaMaterialized(info) {
+		return fmt.Errorf("%w: %s", errMediaNotDownloaded, src)
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return err

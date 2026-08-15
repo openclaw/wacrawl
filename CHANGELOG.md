@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Skip iCloud dataless WhatsApp media during `--copy-media` so sync returns instead of hanging on SF_DATALESS stubs.
+
 ## v0.3.8 - 2026-08-14
 
 ### Fixed

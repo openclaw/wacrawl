@@ -3,6 +3,7 @@ package whatsappdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -969,6 +970,86 @@ func TestCopyArchiveMediaDeduplicatesAndConfinesPaths(t *testing.T) {
 	}
 	if _, err := archiveMediaPath(source, mediaRoot, source); err == nil {
 		t.Fatal("expected source root path to be rejected")
+	}
+}
+
+func TestFileMaterializedRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "photo.jpg")
+	if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fileMaterialized(info) {
+		t.Fatal("regular local file should be materialized")
+	}
+}
+
+func TestCopyMediaFileRejectsUnmaterialized(t *testing.T) {
+	old := mediaMaterialized
+	t.Cleanup(func() { mediaMaterialized = old })
+	mediaMaterialized = func(os.FileInfo) bool { return false }
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	dest := filepath.Join(dir, "out", "photo.jpg")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := copyMediaFile(src, dest)
+	if !errors.Is(err, errMediaNotDownloaded) {
+		t.Fatalf("unmaterialized copyMediaFile error = %v", err)
+	}
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatalf("unmaterialized source must not be copied: dest stat=%v", statErr)
+	}
+}
+
+func TestCopyMediaFileCopiesWhenMaterialized(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	dest := filepath.Join(dir, "out", "photo.jpg")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyMediaFile(src, dest); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dest) // #nosec G304 -- dest is a path we just created under t.TempDir.
+	if err != nil || string(data) != "image" {
+		t.Fatalf("copied media = %q err=%v", data, err)
+	}
+}
+
+func TestCopyArchiveMediaSkipsUnmaterialized(t *testing.T) {
+	old := mediaMaterialized
+	t.Cleanup(func() { mediaMaterialized = old })
+	mediaMaterialized = func(os.FileInfo) bool { return false }
+
+	source := t.TempDir()
+	mediaRoot := filepath.Join(t.TempDir(), "media")
+	mediaPath := filepath.Join(source, "Message", "Media", "chat", "photo.jpg")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mediaPath, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages := []store.Message{{MediaPath: mediaPath}}
+	copied, missing, err := copyArchiveMedia(messages, source, mediaRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied != 0 || missing != 1 {
+		t.Fatalf("copy stats = %d/%d, want 0/1", copied, missing)
+	}
+	if messages[0].MediaPath != mediaPath {
+		t.Fatalf("unmaterialized path should stay original: %q", messages[0].MediaPath)
+	}
+	if _, statErr := os.Stat(filepath.Join(mediaRoot, "Message", "Media", "chat", "photo.jpg")); !os.IsNotExist(statErr) {
+		t.Fatal("unmaterialized source must not be copied into the archive")
 	}
 }
 
