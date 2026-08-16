@@ -1023,6 +1023,50 @@ func TestCopyMediaFileCopiesWhenMaterialized(t *testing.T) {
 	}
 }
 
+func TestCopyMediaFileOpenErrorDoesNotCreateDestination(t *testing.T) {
+	old := openMediaFileForCopy
+	t.Cleanup(func() { openMediaFileForCopy = old })
+	wantErr := errors.New("open failed")
+	openMediaFileForCopy = func(string) (*os.File, error) { return nil, wantErr }
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	dest := filepath.Join(dir, "out", "photo.jpg")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyMediaFile(src, dest); !errors.Is(err, wantErr) {
+		t.Fatalf("copyMediaFile error = %v, want %v", err, wantErr)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("destination should not exist after open failure: %v", err)
+	}
+}
+
+func TestCopyMediaFileReadErrorRemovesDestination(t *testing.T) {
+	old := openMediaFileForCopy
+	t.Cleanup(func() { openMediaFileForCopy = old })
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	dest := filepath.Join(dir, "out", "photo.jpg")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeOnly, err := os.OpenFile(filepath.Join(dir, "write-only"), os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- test path is confined under t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	openMediaFileForCopy = func(string) (*os.File, error) { return writeOnly, nil }
+
+	if err := copyMediaFile(src, dest); err == nil {
+		t.Fatal("copyMediaFile should fail when the source cannot be read")
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("partial destination should be removed after read failure: %v", err)
+	}
+}
+
 func TestCopyArchiveMediaSkipsUnmaterialized(t *testing.T) {
 	old := mediaMaterialized
 	t.Cleanup(func() { mediaMaterialized = old })

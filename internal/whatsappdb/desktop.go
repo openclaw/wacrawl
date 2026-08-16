@@ -539,8 +539,10 @@ func archiveMediaPath(sourceRoot, mediaRoot, src string) (string, error) {
 
 // mediaMaterialized reports whether a media file's bytes are already on disk.
 // Tests replace this to simulate macOS SF_DATALESS (iCloud) stubs.
-var mediaMaterialized = fileMaterialized
-var openMediaFileForCopy = openMediaFile
+var (
+	mediaMaterialized    = fileMaterialized
+	openMediaFileForCopy = openMediaFile
+)
 
 var errMediaNotDownloaded = errors.New("media not downloaded locally")
 
