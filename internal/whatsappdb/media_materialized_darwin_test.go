@@ -3,6 +3,7 @@
 package whatsappdb
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -33,5 +34,24 @@ func TestFileMaterializedDatalessFlag(t *testing.T) {
 	}
 	if !fileMaterialized(fakeFileInfo{FileInfo: info, sys: "not-a-stat"}) {
 		t.Fatal("unknown Sys should be treated as materialized")
+	}
+}
+
+func TestCopyMediaFileTreatsNonblockingOpenAsMissing(t *testing.T) {
+	old := openMediaFileForCopy
+	t.Cleanup(func() { openMediaFileForCopy = old })
+	openMediaFileForCopy = func(string) (*os.File, error) { return nil, syscall.EAGAIN }
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "photo.jpg")
+	dest := filepath.Join(dir, "out", "photo.jpg")
+	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyMediaFile(src, dest); !errors.Is(err, errMediaNotDownloaded) {
+		t.Fatalf("nonblocking open error = %v, want media not downloaded", err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("destination should not exist: %v", err)
 	}
 }

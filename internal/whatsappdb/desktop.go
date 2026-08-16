@@ -540,6 +540,7 @@ func archiveMediaPath(sourceRoot, mediaRoot, src string) (string, error) {
 // mediaMaterialized reports whether a media file's bytes are already on disk.
 // Tests replace this to simulate macOS SF_DATALESS (iCloud) stubs.
 var mediaMaterialized = fileMaterialized
+var openMediaFileForCopy = openMediaFile
 
 var errMediaNotDownloaded = errors.New("media not downloaded locally")
 
@@ -557,9 +558,9 @@ func copyMediaFile(src, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return err
 	}
-	in, err := os.Open(src) // #nosec G304 -- media path comes from the local WhatsApp DB and is copied only on explicit request.
+	in, err := openMediaFileForCopy(src)
 	if err != nil {
-		return err
+		return normalizeMediaReadError(src, err)
 	}
 	defer func() { _ = in.Close() }()
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) // #nosec G304 -- destination is confined under the archive media root.
@@ -568,9 +569,17 @@ func copyMediaFile(src, dest string) error {
 	}
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
-		return err
+		_ = os.Remove(dest)
+		return normalizeMediaReadError(src, err)
 	}
 	return out.Close()
+}
+
+func normalizeMediaReadError(src string, err error) error {
+	if mediaReadWouldBlock(err) {
+		return fmt.Errorf("%w: %s", errMediaNotDownloaded, src)
+	}
+	return err
 }
 
 func readContacts(ctx context.Context, path string) ([]store.Contact, map[string]string, error) {
