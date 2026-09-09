@@ -27,6 +27,8 @@ type Counts struct {
 	Revisions    int `json:"message_revisions,omitempty"`
 	Identity     int `json:"archive_identity,omitempty"`
 	MediaFiles   int `json:"media_files,omitempty"`
+	Sources      int `json:"message_sources,omitempty"`
+	Observations int `json:"source_observations,omitempty"`
 }
 
 type (
@@ -53,13 +55,15 @@ func toCrawlkitManifest(manifest Manifest) ckbackup.Manifest {
 		Exported:   manifest.Exported,
 		Recipients: manifest.Recipients,
 		Counts: map[string]int{
-			"contacts":          manifest.Counts.Contacts,
-			"chats":             manifest.Counts.Chats,
-			"groups":            manifest.Counts.Groups,
-			"participants":      manifest.Counts.Participants,
-			"messages":          manifest.Counts.Messages,
-			"message_revisions": manifest.Counts.Revisions,
-			"archive_identity":  manifest.Counts.Identity,
+			"contacts":            manifest.Counts.Contacts,
+			"chats":               manifest.Counts.Chats,
+			"groups":              manifest.Counts.Groups,
+			"participants":        manifest.Counts.Participants,
+			"messages":            manifest.Counts.Messages,
+			"message_revisions":   manifest.Counts.Revisions,
+			"archive_identity":    manifest.Counts.Identity,
+			"message_sources":     manifest.Counts.Sources,
+			"source_observations": manifest.Counts.Observations,
 		},
 		Shards: manifest.Shards,
 		Files:  manifest.Files,
@@ -84,6 +88,8 @@ func fromCrawlkitManifest(manifest ckbackup.Manifest) Manifest {
 			Messages:     manifest.Counts["messages"],
 			Revisions:    manifest.Counts["message_revisions"],
 			Identity:     manifest.Counts["archive_identity"],
+			Sources:      manifest.Counts["message_sources"],
+			Observations: manifest.Counts["source_observations"],
 			MediaFiles:   len(manifest.Files),
 		},
 		Shards: manifest.Shards,

@@ -7,16 +7,13 @@ import (
 	"time"
 )
 
-func prepareImportTombstones(now time.Time, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message) {
-	deletedChats := make(map[string]Tombstone)
+func prepareImportTombstones(now time.Time, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, aliases map[string]string) {
 	for i := range chats {
 		if chats[i].Removed && chats[i].DeletedAt.IsZero() {
 			chats[i].Tombstone = sourceTombstone(now, "whatsapp_removed")
 		}
-		if !chats[i].DeletedAt.IsZero() {
-			deletedChats[chats[i].JID] = chats[i].Tombstone
-		}
 	}
+	deletedChats := chatParentTombstones(chats, aliases)
 	deletedGroups := make(map[string]Tombstone)
 	for i := range groups {
 		if parent, ok := deletedChats[groups[i].JID]; ok && groups[i].DeletedAt.IsZero() {
@@ -40,11 +37,14 @@ func prepareImportTombstones(now time.Time, chats []Chat, groups []Group, partic
 	}
 }
 
-func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message) error {
+func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, aliases map[string]string) error {
 	liveChats := make(map[string]struct{})
 	for _, chat := range chats {
 		if chat.DeletedAt.IsZero() {
 			liveChats[chat.JID] = struct{}{}
+			if alias := aliases[chat.JID]; alias != "" {
+				liveChats[alias] = struct{}{}
+			}
 		}
 	}
 	for i := range groups {
@@ -83,6 +83,10 @@ func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat
 			participants[i].Tombstone = childTombstone(parent, "parent_group_deleted")
 		}
 	}
+	parents, err := storedChatParentTombstones(ctx, tx, aliases)
+	if err != nil {
+		return err
+	}
 	for i := range messages {
 		if !messages[i].DeletedAt.IsZero() {
 			continue
@@ -90,10 +94,7 @@ func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat
 		if _, live := liveChats[messages[i].ChatJID]; live {
 			continue
 		}
-		parent, found, err := storedTombstone(ctx, tx, "chats", "jid", messages[i].ChatJID)
-		if err != nil {
-			return err
-		}
+		parent, found := parents[messages[i].ChatJID]
 		if found {
 			messages[i].Tombstone = childTombstone(parent, "parent_chat_deleted")
 		}
@@ -138,36 +139,46 @@ func normalizedTombstone(t Tombstone, observedAt time.Time) Tombstone {
 	return t
 }
 
-func tombstoneSubordinates(ctx context.Context, tx *sql.Tx, observedAt time.Time) error {
-	rows, err := tx.QueryContext(ctx, `select `+messageSelectColumns+` from messages m
-where m.deleted_at is null and exists (select 1 from chats c where c.jid=m.chat_jid and c.deleted_at is not null)`)
+func tombstoneSubordinates(ctx context.Context, tx *sql.Tx, observedAt time.Time, stats ImportStats) error {
+	// Parent lifecycle uses retained canonical contact evidence, just as reads
+	// do. Candidate matching above still requires a current input link.
+	contacts, err := readContactIdentities(ctx, tx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
-	var messages []Message
-	for rows.Next() {
-		m, err := scanMessage(rows)
+	parents, err := storedChatParentTombstones(ctx, tx, verifiedContactAliases(contacts))
+	if err != nil {
+		return err
+	}
+	if len(parents) > 0 {
+		rows, err := tx.QueryContext(ctx, `select `+messageSelectColumns+` from messages where deleted_at is null`)
 		if err != nil {
 			return err
 		}
-		messages = append(messages, m)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, m := range messages {
-		var deletedAt int64
-		var source string
-		if err := tx.QueryRowContext(ctx, `select deleted_at,coalesce(deletion_source,'whatsapp-desktop') from chats where jid=?`, m.ChatJID).Scan(&deletedAt, &source); err != nil {
+		defer func() { _ = rows.Close() }()
+		var messages []Message
+		for rows.Next() {
+			m, err := scanMessage(rows)
+			if err != nil {
+				return err
+			}
+			if parent, ok := parents[m.ChatJID]; ok {
+				m.Tombstone = childTombstone(parent, "parent_chat_deleted")
+				messages = append(messages, m)
+			}
+		}
+		if err := rows.Close(); err != nil {
 			return err
 		}
-		m.Tombstone = Tombstone{DeletedAt: fromUnix(deletedAt), DeletionSource: source, DeletionReason: "parent_chat_deleted", LastSeenAt: observedAt}
-		if err := upsertMessage(ctx, tx, m, observedAt); err != nil {
+		if err := rows.Err(); err != nil {
 			return err
+		}
+		for _, m := range messages {
+			m.LastSeenAt = observedAt
+			m.sourceMapping = &SourceMapping{AccountIdentity: stats.AccountIdentity, SourceStoreIdentity: stats.SourceStoreIdentity}
+			if err := upsertMessage(ctx, tx, m, observedAt); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `update groups set

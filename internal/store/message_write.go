@@ -45,17 +45,21 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 		if err != nil {
 			return err
 		}
-		incoming, err := canonicalMessageJSON(m)
+		incoming, err := observableMessageJSON(m)
 		if err != nil {
 			return err
 		}
-		if previous != incoming {
+		observablePrevious, err := observableMessageJSON(existing)
+		if err != nil {
+			return err
+		}
+		if observablePrevious != incoming || m.mediaContentChanged {
 			reason := "whatsapp_edit"
 			if !m.DeletedAt.IsZero() {
 				reason = m.DeletionReason
 			}
-			if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values(?,?,?,?,?)`,
-				existing.EventID, previous, unix(observedAt), "whatsapp-desktop", reason); err != nil {
+			if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason,account_identity,source_store_identity,source_row_pk) values(?,?,?,?,?,?,?,?)`,
+				existing.EventID, previous, unix(observedAt), "whatsapp-desktop", reason, sourceAccount(m), sourceStore(m), revisionSourceRow(m)); err != nil {
 				return err
 			}
 		}

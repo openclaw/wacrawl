@@ -18,13 +18,14 @@ Axolotl.sqlite: ZWAZMDACCOUNT (account identity only)
 ## Identity and merge rules
 
 - WhatsApp timestamps are seconds since `2001-01-01T00:00:00Z`.
-- `ZWAMESSAGE.Z_PK` is retained as `messages.source_row_pk`. Ordinary rows use the same value for the unique archive `source_pk` and map to `messages.event_id` as `wa:<source_pk>`.
-- When WhatsApp reuses an archived message row for a reaction, the original keeps its identity and the reaction receives a deterministic JSON-safe high-range `source_pk` plus a `wa-reaction:<source_row_pk>:<digest>` event ID. The digest covers the chat, reaction stanza, and reaction target, so repeat imports deduplicate without discarding either event; the raw reused row remains available in `source_row_pk` as provenance.
-- Routine merges bind the archive to the canonical source path, a hashed CoreData store fingerprint, and a separately hashed account JID. Event overlap is not an account-identity substitute.
+- Archive `source_pk` and `event_id` remain stable across Desktop relogins. Existing archive event IDs and revision links survive migration. Desktop `ZWAMESSAGE.Z_PK` is a source-local row number, not a cross-login identity.
+- Source mappings retain the account, Desktop store, raw row and event identity associated with each canonical event. Multiple login stores can point to the same event. Reused rows can describe distinct events, including reactions; these retain separate identities and provenance.
+- Imports match overlapping events conservatively across verified same-account stores. Unambiguous contact-provided JID/LID links establish equivalent chat and sender identifiers; names and message overlap never establish person identity. Incomplete or ambiguous matches remain distinct. An unchanged import adds no new events or revisions merely because Desktop row IDs changed.
+- Routine merges bind the archive to the canonical source path and a separately hashed account JID. A replacement Desktop store is accepted only for the same verified account. Event overlap is not an account-identity substitute. A relogin uses ordinary `import` against the existing archive, never exact `--restore`.
 - Legacy archives without verified account binding require one explicit `--adopt-source`. Use a separate `--db` for another account or `--restore` for intentional source replacement.
 - `ZSTANZAID` is not unique enough to identify archived messages.
 - Canonical entities carry `deleted_at`, `deletion_source`, `deletion_reason`, and `last_seen_at`; an unobserved row is never implicitly tombstoned.
-- Prior observable message payloads are append-only `message_revisions` rows keyed by stable event ID.
+- Prior observable message payloads are append-only `message_revisions` rows keyed by stable event ID. Source mappings and distinct raw source payloads are retained in `message_sources` and `source_observations`; encrypted backups preserve both. Recorded timestamps describe when the importer observed a payload, not an inferred upstream edit time.
 - Group senders resolve through `ZWAMESSAGE.ZGROUPMEMBER`.
 - Media joins through both `ZWAMESSAGE.ZMEDIAITEM` and `ZWAMEDIAITEM.ZMESSAGE`.
 - WhatsApp's search database uses its own `wa_tokenizer`; `wacrawl` builds a portable SQLite FTS5 index instead.

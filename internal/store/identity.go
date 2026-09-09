@@ -45,61 +45,62 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 		}
 		existingWeak = legacySourceIdentity(existingWeak)
 	}
+	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
+	existingAccount, err := sourceState(ctx, tx, "merge_account_identity")
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(existingAccount, "wa-store:") {
+		existingAccount = ""
+	}
+	if existingAccount != "" && existingAccount != accountIdentity {
+		legacyMatch := false
+		if accountIdentity != "" && existingStore != "" && existingStore == strings.TrimSpace(stats.SourceStoreIdentity) {
+			for _, candidate := range stats.LegacyAccountIDs {
+				if strings.TrimSpace(candidate) == existingAccount {
+					legacyMatch = true
+					break
+				}
+			}
+		}
+		continuity := false
+		if legacyMatch {
+			resolved, err := resolveReusedReactionIdentities(ctx, tx, false, messages)
+			if err != nil {
+				return "", err
+			}
+			for _, m := range resolved {
+				existing, found, err := messageBySourcePK(ctx, tx, m.SourcePK)
+				if err != nil {
+					return "", err
+				}
+				if found && !messageIdentityConflict(existing, m) {
+					continuity = true
+					break
+				}
+			}
+		}
+		if !continuity {
+			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
+		}
+	}
+	entityRows, err := archiveEntityRows(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	if existingAccount == "" && entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
+		return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
+	}
+	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
+	sameAccount := existingAccount != "" && existingAccount == accountIdentity
+	if existingStore != "" && incomingStore != existingStore && (!sameAccount || incomingStore == "") {
+		return "", errors.New("archive is bound to a different WhatsApp Desktop store; use a separate --db or import --restore")
+	}
 	if strongSource != "" && existingStrong != "" && strongSource != existingStrong {
 		return "", fmt.Errorf("archive is bound to WhatsApp source %q, not %q; use a separate --db or import --restore", existingStrong, strongSource)
 	}
-	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
-	if existingStore != "" && incomingStore != existingStore {
-		return "", errors.New("archive is bound to a different WhatsApp Desktop store; use a separate --db or import --restore")
-	}
 	if existingStrong == "" && existingWeak != "" && weakSource != existingWeak {
 		return "", fmt.Errorf("archive is bound to WhatsApp source path %q, not %q; use a separate --db or import --restore", existingWeak, weakSource)
-	}
-	matchingMessages := 0
-	for _, message := range messages {
-		existing, found, err := messageBySourcePK(ctx, tx, message.SourcePK)
-		if err != nil {
-			return "", err
-		}
-		if found && messageIdentityConflict(existing, message) {
-			return "", fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", message.SourcePK)
-		}
-		if found {
-			matchingMessages++
-		}
-	}
-	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
-	var existingAccount string
-	err = tx.QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&existingAccount)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	existingAccount = strings.TrimSpace(existingAccount)
-	if strings.HasPrefix(existingAccount, "wa-store:") {
-		// Early schema-v2 builds mistook Core Data's persistent-store UUID for
-		// an account identity. It is only a source marker and cannot prove that
-		// a logout/login cycle kept the same WhatsApp account.
-		existingAccount = ""
-	}
-	if existingAccount != "" {
-		legacyMatch := false
-		for _, candidate := range stats.LegacyAccountIDs {
-			if strings.TrimSpace(candidate) == existingAccount {
-				legacyMatch = true
-				break
-			}
-		}
-		if accountIdentity == "" || (existingAccount != accountIdentity && (!legacyMatch || matchingMessages == 0)) {
-			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
-		}
-	} else {
-		entityRows, err := archiveEntityRows(ctx, tx)
-		if err != nil {
-			return "", err
-		}
-		if entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
-			return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
-		}
 	}
 	if strongSource != "" {
 		return strongSource, nil

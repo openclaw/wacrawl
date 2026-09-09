@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve cumulative WhatsApp history across verified same-account Desktop relogins, retaining event identities, source provenance, and encrypted backup evidence (#88, thanks @alexph-dev).
+
 ## 0.3.13 - 2026-09-13
 
 - Handle SQLite quoted, Unicode, and dollar-containing identifiers in read-only SQL, accepting names with semicolons and rejecting write CTEs with keyword-like names.

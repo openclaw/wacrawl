@@ -130,6 +130,10 @@ func (s *Store) listChats(ctx context.Context, filter ChatFilter) ([]Chat, error
 }
 
 func (s *Store) Messages(ctx context.Context, filter MessageFilter) ([]Message, error) {
+	filter, err := s.withContactAliases(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -193,6 +197,10 @@ func filteredMessagesQuery(filter MessageFilter, extraColumns string) (string, [
 }
 
 func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, error) {
+	filter, err := s.withContactAliases(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(filter.Query) == "" {
 		return nil, errors.New("search query required")
 	}
@@ -228,12 +236,22 @@ func applyMessageFilters(query string, args []any, filter MessageFilter, joined 
 		query += " and " + prefix + "deleted_at is null"
 	}
 	if strings.TrimSpace(filter.ChatJID) != "" {
-		query += " and " + prefix + "chat_jid = ?"
-		args = append(args, filter.ChatJID)
+		if filter.chatAlias == "" {
+			query += " and " + prefix + "chat_jid = ?"
+			args = append(args, filter.ChatJID)
+		} else {
+			query += " and " + prefix + "chat_jid in (?,?)"
+			args = append(args, filter.ChatJID, filter.chatAlias)
+		}
 	}
 	if strings.TrimSpace(filter.Sender) != "" {
-		query += " and " + prefix + "sender_jid = ?"
-		args = append(args, filter.Sender)
+		if filter.senderAlias == "" {
+			query += " and " + prefix + "sender_jid = ?"
+			args = append(args, filter.Sender)
+		} else {
+			query += " and " + prefix + "sender_jid in (?,?)"
+			args = append(args, filter.Sender, filter.senderAlias)
+		}
 	}
 	if filter.After != nil {
 		query += " and " + prefix + "ts >= ?"

@@ -93,12 +93,24 @@ type Message struct {
 }
 
 type MessageRevision struct {
-	ID          int64
-	EventID     string
-	PayloadJson string
-	RecordedAt  int64
-	EventSource string
-	Reason      string
+	ID                  int64
+	EventID             string
+	PayloadJson         string
+	RecordedAt          int64
+	EventSource         string
+	AccountIdentity     string
+	SourceStoreIdentity string
+	SourceRowPk         int64
+	Reason              string
+}
+
+type MessageSource struct {
+	AccountIdentity     string
+	SourceStoreIdentity string
+	SourceRowPk         int64
+	Discriminator       string
+	EventID             string
+	MatchKind           string
 }
 
 type MessagesFt struct {
@@ -107,6 +119,16 @@ type MessagesFt struct {
 	Chat   sql.NullString
 	Sender sql.NullString
 	Media  sql.NullString
+}
+
+type SourceObservation struct {
+	AccountIdentity     string
+	SourceStoreIdentity string
+	SourceRowPk         int64
+	Discriminator       string
+	PayloadHash         string
+	PayloadJson         string
+	RecordedAt          int64
 }
 
 type SyncState struct {

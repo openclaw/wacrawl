@@ -23,6 +23,8 @@ func writeSnapshot(ctx context.Context, cfg Config, data store.SnapshotData, fil
 		identities = append(identities, archiveIdentity{SourceStoreIdentity: data.SourceStoreIdentity, AccountIdentity: data.AccountIdentity})
 	}
 	shards := []ckbackup.Shard{
+		{Table: "message_sources", Path: "data/message_sources.jsonl.gz.age", Rows: data.Sources},
+		{Table: "source_observations", Path: "data/source_observations.jsonl.gz.age", Rows: data.Observations},
 		{Table: "contacts", Path: "data/contacts.jsonl.gz.age", Rows: data.Contacts},
 		{Table: "chats", Path: "data/chats.jsonl.gz.age", Rows: data.Chats},
 		{Table: "groups", Path: "data/groups.jsonl.gz.age", Rows: data.Groups},
@@ -55,6 +57,14 @@ func decodeSnapshot(shards []ckbackup.DecodedShard) (store.SnapshotData, error) 
 	var data store.SnapshotData
 	for _, shard := range shards {
 		switch shard.Entry.Table {
+		case "message_sources":
+			if err := ckbackup.DecodeJSONL(shard.Plaintext, &data.Sources); err != nil {
+				return store.SnapshotData{}, err
+			}
+		case "source_observations":
+			if err := ckbackup.DecodeJSONL(shard.Plaintext, &data.Observations); err != nil {
+				return store.SnapshotData{}, err
+			}
 		case "contacts":
 			if err := ckbackup.DecodeJSONL(shard.Plaintext, &data.Contacts); err != nil {
 				return store.SnapshotData{}, err

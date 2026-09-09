@@ -18,7 +18,10 @@ func (s *Store) MergeAll(ctx context.Context, stats ImportStats, contacts []Cont
 	return s.importAll(ctx, false, stats, contacts, chats, groups, participants, messages, nil)
 }
 
-func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages []Message, restore bool) error {
+func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages []Message, restore bool, contacts ...Contact) error {
+	if err := validateContactIdentities(contacts); err != nil {
+		return err
+	}
 	if err := validateImportMessages(messages); err != nil {
 		return err
 	}
@@ -27,15 +30,30 @@ func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages 
 		return err
 	}
 	defer rollback(tx)
-	messages, err = resolveReusedReactionIdentities(ctx, tx, restore, messages)
+	if _, err = validateImportSource(ctx, tx, restore, stats, messages); err != nil {
+		return err
+	}
+	if !restore {
+		existingAccount, err := sourceState(ctx, tx, "merge_account_identity")
+		if err != nil {
+			return err
+		}
+		if existingAccount != "" && !strings.HasPrefix(existingAccount, "wa-store:") {
+			stats.AccountIdentity = existingAccount
+		}
+	}
+	aliases, err := prepareContactIdentities(ctx, tx, contacts)
 	if err != nil {
 		return err
 	}
-	_, err = validateImportSource(ctx, tx, restore, stats, messages)
+	_, err = resolveImportMessages(ctx, tx, restore, stats, messages, aliases)
 	return err
 }
 
-func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, contacts []Contact, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, revisions []MessageRevision) error {
+func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, contacts []Contact, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, revisions []MessageRevision, provenance ...SnapshotData) error {
+	if err := validateContactIdentities(contacts); err != nil {
+		return err
+	}
 	if err := validateImportMessages(messages); err != nil {
 		return err
 	}
@@ -44,10 +62,6 @@ func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, 
 		return err
 	}
 	defer rollback(tx)
-	messages, err = resolveReusedReactionIdentities(ctx, tx, restore, messages)
-	if err != nil {
-		return err
-	}
 	mergeSource, err := validateImportSource(ctx, tx, restore, stats, messages)
 	if err != nil {
 		return err
@@ -55,6 +69,8 @@ func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, 
 	if restore {
 		if _, err := tx.ExecContext(ctx, `
 delete from messages_fts;
+delete from source_observations;
+delete from message_sources;
 delete from message_revisions;
 delete from messages;
 delete from group_participants;
@@ -65,6 +81,22 @@ delete from sync_state;`); err != nil {
 			return err
 		}
 	}
+	if !restore {
+		if err := normalizeSourceAccount(ctx, tx, stats.AccountIdentity); err != nil {
+			return err
+		}
+	}
+	var aliases map[string]string
+	if !restore {
+		aliases, err = prepareContactIdentities(ctx, tx, contacts)
+		if err != nil {
+			return err
+		}
+	}
+	messages, err = resolveImportMessages(ctx, tx, restore, stats, messages, aliases)
+	if err != nil {
+		return err
+	}
 	now := stats.FinishedAt
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -74,8 +106,15 @@ delete from sync_state;`); err != nil {
 	if sourceSnapshotAt.IsZero() {
 		sourceSnapshotAt = now
 	}
-	prepareImportTombstones(now, chats, groups, participants, messages)
-	if err := prepareStoredParentTombstones(ctx, tx, chats, groups, participants, messages); err != nil {
+	// Source observations precede derived lifecycle effects. Reobserving a
+	// removed chat must not create a new source payload merely as time passes.
+	for _, m := range messages {
+		if err := recordSource(ctx, tx, m, now); err != nil {
+			return err
+		}
+	}
+	prepareImportTombstones(now, chats, groups, participants, messages, aliases)
+	if err := prepareStoredParentTombstones(ctx, tx, chats, groups, participants, messages, aliases); err != nil {
 		return err
 	}
 	for _, c := range contacts {
@@ -87,7 +126,7 @@ values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 on conflict(jid) do update set
 phone=excluded.phone, full_name=excluded.full_name, first_name=excluded.first_name,
 last_name=excluded.last_name, business_name=excluded.business_name, username=excluded.username,
-lid=excluded.lid, about_text=excluded.about_text, updated_at=excluded.updated_at,
+lid=case when excluded.lid is null or excluded.lid='' then contacts.lid else excluded.lid end, about_text=excluded.about_text, updated_at=excluded.updated_at,
 deleted_at=case when contacts.deleted_at is not null then contacts.deleted_at else excluded.deleted_at end,
 deletion_source=case when contacts.deleted_at is not null then contacts.deletion_source else excluded.deletion_source end,
 deletion_reason=case when contacts.deleted_at is not null then contacts.deletion_reason else excluded.deletion_reason end,
@@ -158,12 +197,21 @@ last_seen_at=excluded.last_seen_at`,
 		}
 	}
 	for _, revision := range revisions {
-		if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values(?,?,?,?,?)`,
-			revision.EventID, revision.PayloadJSON, unix(revision.RecordedAt), revision.EventSource, revision.Reason); err != nil {
+		if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason,account_identity,source_store_identity,source_row_pk) values(?,?,?,?,?,?,?,?)`,
+			revision.EventID, revision.PayloadJSON, unix(revision.RecordedAt), revision.EventSource, revision.Reason, revision.AccountIdentity, revision.SourceStoreIdentity, revision.SourceRowPK); err != nil {
 			return err
 		}
 	}
-	if err := tombstoneSubordinates(ctx, tx, now); err != nil {
+	if len(provenance) > 0 {
+		if err := restoreSources(ctx, tx, provenance[0]); err != nil {
+			return err
+		}
+	} else if restore {
+		if err := backfillSources(ctx, tx, stats.AccountIdentity, stats.SourceStoreIdentity); err != nil {
+			return err
+		}
+	}
+	if err := tombstoneSubordinates(ctx, tx, now, stats); err != nil {
 		return err
 	}
 	for key, value := range map[string]string{

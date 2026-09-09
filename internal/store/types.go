@@ -141,24 +141,33 @@ type Message struct {
 	SourceTextNull bool      `json:"-"`
 	// Rejected optional cache paths are not evidence of a cleared source payload.
 	SourceMediaPathRejected bool `json:"-"`
+	mediaContentChanged     bool
+	sourceMapping           *SourceMapping
+	sourceChatJID           string
+	sourceSenderJID         string
 	storedUnix              int64
 }
 
 type MessageRevision struct {
-	EventID     string    `json:"event_id"`
-	PayloadJSON string    `json:"payload_json"`
-	RecordedAt  time.Time `json:"recorded_at"`
-	EventSource string    `json:"event_source"`
-	Reason      string    `json:"reason"`
+	EventID             string    `json:"event_id"`
+	PayloadJSON         string    `json:"payload_json"`
+	RecordedAt          time.Time `json:"recorded_at"`
+	EventSource         string    `json:"event_source"`
+	Reason              string    `json:"reason"`
+	AccountIdentity     string    `json:"account_identity,omitempty"`
+	SourceStoreIdentity string    `json:"source_store_identity,omitempty"`
+	SourceRowPK         int64     `json:"source_row_pk,omitempty"`
 }
 
 type MessageFilter struct {
-	Query   string
-	ChatJID string
-	Sender  string
-	Limit   int
-	After   *time.Time
-	Before  *time.Time
+	chatAlias   string
+	senderAlias string
+	Query       string
+	ChatJID     string
+	Sender      string
+	Limit       int
+	After       *time.Time
+	Before      *time.Time
 	// BeforePK tightens Before into a composite cursor: rows must have
 	// ts < Before, or ts == Before with source_pk < BeforePK. Without it,
 	// paging by timestamp alone can stall when a page boundary lands inside

@@ -110,7 +110,6 @@ func TestAuditMergeMediaRetention(t *testing.T) {
 				wantError = true
 			case "event-conflict":
 				incoming.MessageID = "other"
-				wantError = true
 			case "tombstone":
 				incoming.RawType, incoming.MediaSize = 0, 0
 				incoming.MediaType, incoming.MediaURL, incoming.MediaTitle, incoming.MediaPath = "", "", "", ""
@@ -128,6 +127,12 @@ func TestAuditMergeMediaRetention(t *testing.T) {
 			if wantError {
 				if !reflect.DeepEqual(before, after) {
 					t.Fatal("failed merge changed canonical rows/revisions/bindings")
+				}
+				return
+			}
+			if kind == "event-conflict" {
+				if len(after.Messages) != 2 || !reflect.DeepEqual(before.Messages[0], after.Messages[0]) || after.Messages[1].MediaPath != newPath {
+					t.Fatal("reused source row overwrote old event or inherited its attachment")
 				}
 				return
 			}
@@ -151,11 +156,15 @@ func TestAuditMergeMediaRetention(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			current, err := canonicalMessageJSON(after.Messages[0])
+			current, err := observableMessageJSON(after.Messages[0])
 			if err != nil {
 				t.Fatal(err)
 			}
-			if previous == current {
+			observablePrevious, err := observableMessageJSON(before.Messages[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observablePrevious == current && kind != "different-bytes" {
 				if len(after.Revisions) != 0 {
 					t.Fatalf("spurious revision: %+v", after.Revisions)
 				}
