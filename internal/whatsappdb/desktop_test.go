@@ -1414,3 +1414,214 @@ func mustExecFile(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+func TestCopyMediaKeepsConflictingBytesAndDeduplicates(t *testing.T) {
+	source := t.TempDir()
+	archive := t.TempDir()
+	src := filepath.Join(source, "Media", "image.jpg")
+	if err := os.MkdirAll(filepath.Dir(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages := []store.Message{{MediaPath: src}}
+	if _, _, err := copyArchiveMedia(messages, source, archive); err != nil {
+		t.Fatal(err)
+	}
+	first := messages[0].MediaPath
+	if err := os.WriteFile(src, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	messages[0].MediaPath = src
+	if _, _, err := copyArchiveMedia(messages, source, archive); err != nil {
+		t.Fatal(err)
+	}
+	second := messages[0].MediaPath
+	if first == second {
+		t.Fatal("different content reused path")
+	}
+	for path, want := range map[string]string{first: "first", second: "second"} {
+		data, err := os.ReadFile(path) // #nosec G304 -- read the two archive paths returned by this test's confined copier.
+		if err != nil || string(data) != want {
+			t.Fatalf("lost media bytes %v", err)
+		}
+	}
+	messages[0].MediaPath = src
+	if _, _, err := copyArchiveMedia(messages, source, archive); err != nil {
+		t.Fatal(err)
+	}
+	if messages[0].MediaPath != second {
+		t.Fatal("repeat media copy allocated another path")
+	}
+	files, err := os.ReadDir(archive)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("unexpected media growth: %d %v", len(files), err)
+	}
+}
+
+func TestDesktopSecondAndThirdLoginImport(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	original, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, uuid := range []string{"second", "third"} {
+		db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `update Z_METADATA set Z_UUID='`+uuid+`'; update ZWAMESSAGE set Z_PK=Z_PK+100; update ZWAMEDIAITEM set ZMESSAGE=ZMESSAGE+100`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, CopyMedia: true}); err != nil {
+			t.Fatal(err)
+		}
+		before, err := archive.ExportAll(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(before.Messages) != len(original.Messages) || len(before.Revisions) != 0 {
+			t.Fatalf("relogin changed history counts: %d %d", len(before.Messages), len(before.Revisions))
+		}
+		for i, m := range before.Messages {
+			if m.EventID != original.Messages[i].EventID || m.Text != original.Messages[i].Text {
+				t.Fatal("relogin changed event identity or text")
+			}
+		}
+		if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, CopyMedia: true}); err != nil {
+			t.Fatal(err)
+		}
+		after, err := archive.ExportAll(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(after.Messages) != len(before.Messages) || len(after.Revisions) != len(before.Revisions) || len(after.Sources) != len(before.Sources) || len(after.Observations) != len(before.Observations) {
+			t.Fatal("repeat native import grew archive")
+		}
+	}
+}
+
+func TestDesktopContactLinkedBarePNToLIDRelogin(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	old, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contacts, err := sql.Open("sqlite", filepath.Join(source, contactsDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, contacts, `update ZWAADDRESSBOOKCONTACT set ZLID='900' where ZWHATSAPPID='111@s.whatsapp.net'`)
+	if err := contacts.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `update Z_METADATA set Z_UUID='alias-second';
+ update ZWACHATSESSION set ZCONTACTJID='900@lid' where ZCONTACTJID='111@s.whatsapp.net';
+ update ZWAMESSAGE set ZFROMJID='900@lid' where ZFROMJID='111@s.whatsapp.net';
+ update ZWAMESSAGE set ZTOJID='900@lid' where ZISFROMME=1 and ZTOJID='111@s.whatsapp.net';
+ update ZWAMESSAGE set Z_PK=Z_PK+100; update ZWAMEDIAITEM set ZMESSAGE=ZMESSAGE+100;`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	after, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Messages) != len(old.Messages) || len(after.Revisions) != 0 {
+		t.Fatalf("native alias import duplicated/revised history: %d %d", len(after.Messages), len(after.Revisions))
+	}
+	for _, c := range after.Contacts {
+		if c.JID == "111@s.whatsapp.net" && c.LID != "900" {
+			t.Fatal("native raw bare LID was rewritten")
+		}
+	}
+	for i, m := range after.Messages {
+		if m.EventID != old.Messages[i].EventID || m.ChatJID != old.Messages[i].ChatJID || m.SenderJID != old.Messages[i].SenderJID {
+			t.Fatal("native alias import changed canonical IDs")
+		}
+	}
+	for _, jid := range []string{"111@s.whatsapp.net", "900@lid"} {
+		messages, err := archive.Messages(ctx, store.MessageFilter{ChatJID: jid, Limit: 20})
+		if err != nil || len(messages) != 3 {
+			t.Fatalf("native alias chat filter: %d %v", len(messages), err)
+		}
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	repeat, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repeat.Messages) != len(after.Messages) || len(repeat.Revisions) != 0 || len(repeat.Sources) != len(after.Sources) || len(repeat.Observations) != len(after.Observations) {
+		t.Fatal("native alias repeat grew archive")
+	}
+	db, err = sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `update ZWACHATSESSION set ZREMOVED=1 where ZCONTACTJID='900@lid'; delete from ZWAMESSAGE where Z_PK=104;`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deleted.Messages) != 4 || len(deleted.Revisions) != 3 {
+		t.Fatalf("native alias deletion history counts: %d %d", len(deleted.Messages), len(deleted.Revisions))
+	}
+	for _, m := range deleted.Messages {
+		if m.ChatJID == "111@s.whatsapp.net" && m.DeletedAt.IsZero() {
+			t.Fatal("native alias deletion missed canonical or archived-only event")
+		}
+	}
+	for _, jid := range []string{"111@s.whatsapp.net", "900@lid"} {
+		rows, err := archive.Messages(ctx, store.MessageFilter{ChatJID: jid, Limit: 20})
+		if err != nil || len(rows) != 0 {
+			t.Fatal("native deleted alias is still searchable")
+		}
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatal(err)
+	}
+	stable, err := archive.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stable.Observations) != len(deleted.Observations) || len(stable.Revisions) != len(deleted.Revisions) {
+		t.Fatal("native removed alias repeat grew provenance")
+	}
+}

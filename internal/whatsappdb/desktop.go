@@ -443,7 +443,7 @@ func ImportWithOptions(ctx context.Context, st *store.Store, opts ImportOptions)
 	if opts.Restore {
 		stats.Mode = "restore"
 	}
-	if err := st.ValidateImport(ctx, stats, data.Messages, opts.Restore); err != nil {
+	if err := st.ValidateImport(ctx, stats, data.Messages, opts.Restore, data.Contacts...); err != nil {
 		return stats, err
 	}
 	mediaRoot := opts.MediaRoot

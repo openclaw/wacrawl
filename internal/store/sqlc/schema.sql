@@ -26,6 +26,7 @@ create table contacts (
 	business_name text,
 	username text,
 	lid text,
+	lid_evidence text not null default '[]',
 	about_text text,
 	updated_at integer,
 	deleted_at integer,
@@ -107,6 +108,9 @@ create table message_revisions (
 	payload_json text not null,
 	recorded_at integer not null,
 	event_source text not null,
+	account_identity text not null default '',
+	source_store_identity text not null default '',
+	source_row_pk integer not null default 0,
 	reason text not null
 );
 
@@ -116,4 +120,28 @@ create table sync_state (
 	key text primary key,
 	value text not null,
 	updated_at integer not null
+);
+
+
+create table if not exists message_sources (
+ account_identity text not null,
+ source_store_identity text not null,
+ source_row_pk integer not null,
+ discriminator text not null,
+ event_id text not null references messages(event_id) deferrable initially deferred,
+ match_kind text not null,
+ primary key(account_identity, source_store_identity, source_row_pk, discriminator)
+);
+create index if not exists idx_message_sources_event on message_sources(event_id);
+create table if not exists source_observations (
+ account_identity text not null,
+ source_store_identity text not null,
+ source_row_pk integer not null,
+ discriminator text not null,
+ payload_hash text not null,
+ payload_json text not null,
+ recorded_at integer not null,
+ primary key(account_identity, source_store_identity, source_row_pk, discriminator, payload_hash),
+ foreign key(account_identity, source_store_identity, source_row_pk, discriminator)
+ references message_sources(account_identity, source_store_identity, source_row_pk, discriminator)
 );

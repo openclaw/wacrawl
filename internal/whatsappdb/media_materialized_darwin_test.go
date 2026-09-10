@@ -40,7 +40,7 @@ func TestFileMaterializedDatalessFlag(t *testing.T) {
 func TestCopyMediaFileTreatsNonblockingOpenAsMissing(t *testing.T) {
 	old := openMediaFileForCopy
 	t.Cleanup(func() { openMediaFileForCopy = old })
-	openMediaFileForCopy = func(string) (*os.File, error) { return nil, syscall.EAGAIN }
+	openMediaFileForCopy = func(string, string) (*os.File, error) { return nil, syscall.EAGAIN }
 
 	dir := t.TempDir()
 	src := filepath.Join(dir, "photo.jpg")
@@ -48,7 +48,7 @@ func TestCopyMediaFileTreatsNonblockingOpenAsMissing(t *testing.T) {
 	if err := os.WriteFile(src, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyMediaFile(src, dest); !errors.Is(err, errMediaNotDownloaded) {
+	if _, err := copyMediaFile(dir, src, dest); !errors.Is(err, errMediaNotDownloaded) {
 		t.Fatalf("nonblocking open error = %v, want media not downloaded", err)
 	}
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {

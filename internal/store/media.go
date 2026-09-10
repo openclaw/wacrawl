@@ -43,6 +43,7 @@ func retainArchivedMedia(root string, old, incoming Message) (Message, error) {
 				return incoming, err
 			}
 			if string(left.Sum(nil)) != string(right.Sum(nil)) {
+				incoming.mediaContentChanged = true
 				return incoming, nil
 			}
 		}

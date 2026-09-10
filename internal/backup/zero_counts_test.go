@@ -114,7 +114,7 @@ func zeroCountManifest(t *testing.T, opts Options, messages, revisions int) ckba
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]int{"messages": messages, "message_revisions": revisions} {
+	for key, want := range map[string]int{"messages": messages, "message_revisions": revisions, "message_sources": 0, "source_observations": 0} {
 		if got, ok := manifest.Counts[key]; !ok || got != want {
 			t.Fatalf("raw count %s = %d, present=%v; want %d", key, got, ok, want)
 		}

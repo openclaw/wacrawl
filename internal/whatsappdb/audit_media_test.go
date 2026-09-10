@@ -114,12 +114,8 @@ update ZWAMEDIAITEM set ZTITLE='',ZMEDIAURL='',ZFILESIZE=0 where Z_PK=1;`)
 					t.Fatalf("message %d changed beyond rejected path/observation time:\n%+v\n%+v", i, old, got)
 				}
 			}
-			if len(after.Revisions) != len(before.Revisions)+1 {
-				t.Fatalf("revision count: %+v", after.Revisions)
-			}
-			revision := after.Revisions[len(after.Revisions)-1]
-			if revision.Reason != "whatsapp_edit" || revision.EventSource != "whatsapp-desktop" {
-				t.Fatalf("fabricated deletion: %+v", revision)
+			if len(after.Revisions) != len(before.Revisions) {
+				t.Fatal("rejected local path manufactured an edit revision")
 			}
 			encoded, err := json.Marshal(after)
 			if err != nil || bytes.Contains(encoded, []byte(outside)) || bytes.Contains(encoded, []byte("SourceMediaPathRejected")) {

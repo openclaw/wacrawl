@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	schemaVersion           = 3
+	schemaVersion           = 5
 	whatsappReactionRawType = 14
 	// Keep synthetic keys in [2^52, 2^53) so they remain distinguishable from
 	// practical Core Data row IDs and exactly representable in web JSON.
@@ -127,6 +127,7 @@ type Contact struct {
 	LastName     string
 	BusinessName string
 	Username     string
+	LIDEvidence  []ContactLIDEvidence `json:"lid_evidence,omitempty"`
 	LID          string
 	AboutText    string
 	UpdatedAt    time.Time
@@ -175,24 +176,33 @@ type Message struct {
 	SourceTextNull bool      `json:"-"`
 	// Rejected optional cache paths are not evidence of a cleared source payload.
 	SourceMediaPathRejected bool `json:"-"`
+	mediaContentChanged     bool
+	sourceMapping           *SourceMapping
+	sourceChatJID           string
+	sourceSenderJID         string
 	storedUnix              int64
 }
 
 type MessageRevision struct {
-	EventID     string    `json:"event_id"`
-	PayloadJSON string    `json:"payload_json"`
-	RecordedAt  time.Time `json:"recorded_at"`
-	EventSource string    `json:"event_source"`
-	Reason      string    `json:"reason"`
+	EventID             string    `json:"event_id"`
+	PayloadJSON         string    `json:"payload_json"`
+	RecordedAt          time.Time `json:"recorded_at"`
+	EventSource         string    `json:"event_source"`
+	Reason              string    `json:"reason"`
+	AccountIdentity     string    `json:"account_identity,omitempty"`
+	SourceStoreIdentity string    `json:"source_store_identity,omitempty"`
+	SourceRowPK         int64     `json:"source_row_pk,omitempty"`
 }
 
 type MessageFilter struct {
-	Query   string
-	ChatJID string
-	Sender  string
-	Limit   int
-	After   *time.Time
-	Before  *time.Time
+	chatAlias   string
+	senderAlias string
+	Query       string
+	ChatJID     string
+	Sender      string
+	Limit       int
+	After       *time.Time
+	Before      *time.Time
 	// BeforePK tightens Before into a composite cursor: rows must have
 	// ts < Before, or ts == Before with source_pk < BeforePK. Without it,
 	// paging by timestamp alone can stall when a page boundary lands inside
@@ -317,6 +327,12 @@ begin select raise(abort, 'messages.event_id is required'); end;`); err != nil {
 			return fmt.Errorf("backfill %s last_seen_at: %w", table, err)
 		}
 	}
+	if err := migrateContactEvidence(ctx, tx); err != nil {
+		return err
+	}
+	if err := migrateSources(ctx, tx); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("pragma user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
@@ -362,7 +378,10 @@ func (s *Store) MergeAll(ctx context.Context, stats ImportStats, contacts []Cont
 	return s.importAll(ctx, false, stats, contacts, chats, groups, participants, messages, nil)
 }
 
-func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages []Message, restore bool) error {
+func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages []Message, restore bool, contacts ...Contact) error {
+	if err := validateContactIdentities(contacts); err != nil {
+		return err
+	}
 	if err := validateImportMessages(messages); err != nil {
 		return err
 	}
@@ -371,15 +390,30 @@ func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages 
 		return err
 	}
 	defer rollback(tx)
-	messages, err = resolveReusedReactionIdentities(ctx, tx, restore, messages)
+	if _, err = validateImportSource(ctx, tx, restore, stats, messages); err != nil {
+		return err
+	}
+	if !restore {
+		existingAccount, err := sourceState(ctx, tx, "merge_account_identity")
+		if err != nil {
+			return err
+		}
+		if existingAccount != "" && !strings.HasPrefix(existingAccount, "wa-store:") {
+			stats.AccountIdentity = existingAccount
+		}
+	}
+	_, aliases, err := prepareContactIdentities(ctx, tx, contacts, stats, restore, false)
 	if err != nil {
 		return err
 	}
-	_, err = validateImportSource(ctx, tx, restore, stats, messages)
+	_, err = resolveImportMessages(ctx, tx, restore, stats, messages, aliases)
 	return err
 }
 
-func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, contacts []Contact, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, revisions []MessageRevision) error {
+func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, contacts []Contact, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, revisions []MessageRevision, provenance ...SnapshotData) error {
+	if err := validateContactIdentities(contacts); err != nil {
+		return err
+	}
 	if err := validateImportMessages(messages); err != nil {
 		return err
 	}
@@ -388,10 +422,6 @@ func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, 
 		return err
 	}
 	defer rollback(tx)
-	messages, err = resolveReusedReactionIdentities(ctx, tx, restore, messages)
-	if err != nil {
-		return err
-	}
 	mergeSource, err := validateImportSource(ctx, tx, restore, stats, messages)
 	if err != nil {
 		return err
@@ -399,6 +429,8 @@ func (s *Store) importAll(ctx context.Context, restore bool, stats ImportStats, 
 	if restore {
 		if _, err := tx.ExecContext(ctx, `
 delete from messages_fts;
+delete from source_observations;
+delete from message_sources;
 delete from message_revisions;
 delete from messages;
 delete from group_participants;
@@ -409,6 +441,22 @@ delete from sync_state;`); err != nil {
 			return err
 		}
 	}
+	if !restore {
+		if err := normalizeSourceAccount(ctx, tx, stats.AccountIdentity); err != nil {
+			return err
+		}
+	}
+	if stats.FinishedAt.IsZero() {
+		stats.FinishedAt = time.Now().UTC()
+	}
+	contacts, aliases, err := prepareContactIdentities(ctx, tx, contacts, stats, restore, len(provenance) > 0)
+	if err != nil {
+		return err
+	}
+	messages, err = resolveImportMessages(ctx, tx, restore, stats, messages, aliases)
+	if err != nil {
+		return err
+	}
 	now := stats.FinishedAt
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -418,25 +466,36 @@ delete from sync_state;`); err != nil {
 	if sourceSnapshotAt.IsZero() {
 		sourceSnapshotAt = now
 	}
-	prepareImportTombstones(now, chats, groups, participants, messages)
-	if err := prepareStoredParentTombstones(ctx, tx, chats, groups, participants, messages); err != nil {
+	// Source observations precede derived lifecycle effects. Reobserving a
+	// removed chat must not create a new source payload merely as time passes.
+	for _, m := range messages {
+		if err := recordSource(ctx, tx, m, now); err != nil {
+			return err
+		}
+	}
+	prepareImportTombstones(now, chats, groups, participants, messages, aliases)
+	if err := prepareStoredParentTombstones(ctx, tx, chats, groups, participants, messages, aliases); err != nil {
 		return err
 	}
 	for _, c := range contacts {
 		t := normalizedTombstone(c.Tombstone, now)
+		evidence, err := json.Marshal(c.LIDEvidence)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `insert into contacts(
-jid, phone, full_name, first_name, last_name, business_name, username, lid, about_text, updated_at,
+jid, phone, full_name, first_name, last_name, business_name, username, lid, lid_evidence, about_text, updated_at,
 deleted_at, deletion_source, deletion_reason, last_seen_at)
-values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 on conflict(jid) do update set
 phone=excluded.phone, full_name=excluded.full_name, first_name=excluded.first_name,
 last_name=excluded.last_name, business_name=excluded.business_name, username=excluded.username,
-lid=excluded.lid, about_text=excluded.about_text, updated_at=excluded.updated_at,
+lid=case when excluded.lid is null or excluded.lid='' then contacts.lid else excluded.lid end, lid_evidence=excluded.lid_evidence, about_text=excluded.about_text, updated_at=excluded.updated_at,
 deleted_at=case when contacts.deleted_at is not null then contacts.deleted_at else excluded.deleted_at end,
 deletion_source=case when contacts.deleted_at is not null then contacts.deletion_source else excluded.deletion_source end,
 deletion_reason=case when contacts.deleted_at is not null then contacts.deletion_reason else excluded.deletion_reason end,
 last_seen_at=excluded.last_seen_at`,
-			c.JID, c.Phone, c.FullName, c.FirstName, c.LastName, c.BusinessName, c.Username, c.LID, c.AboutText, unix(c.UpdatedAt),
+			c.JID, c.Phone, c.FullName, c.FirstName, c.LastName, c.BusinessName, c.Username, c.LID, string(evidence), c.AboutText, unix(c.UpdatedAt),
 			nullableUnix(t.DeletedAt), nullableString(t.DeletionSource), nullableString(t.DeletionReason), unix(t.LastSeenAt)); err != nil {
 			return err
 		}
@@ -502,12 +561,21 @@ last_seen_at=excluded.last_seen_at`,
 		}
 	}
 	for _, revision := range revisions {
-		if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values(?,?,?,?,?)`,
-			revision.EventID, revision.PayloadJSON, unix(revision.RecordedAt), revision.EventSource, revision.Reason); err != nil {
+		if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason,account_identity,source_store_identity,source_row_pk) values(?,?,?,?,?,?,?,?)`,
+			revision.EventID, revision.PayloadJSON, unix(revision.RecordedAt), revision.EventSource, revision.Reason, revision.AccountIdentity, revision.SourceStoreIdentity, revision.SourceRowPK); err != nil {
 			return err
 		}
 	}
-	if err := tombstoneSubordinates(ctx, tx, now); err != nil {
+	if len(provenance) > 0 {
+		if err := restoreSources(ctx, tx, provenance[0]); err != nil {
+			return err
+		}
+	} else if restore {
+		if err := backfillSources(ctx, tx, stats.AccountIdentity, stats.SourceStoreIdentity); err != nil {
+			return err
+		}
+	}
+	if err := tombstoneSubordinates(ctx, tx, now, stats); err != nil {
 		return err
 	}
 	for key, value := range map[string]string{
@@ -573,61 +641,62 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 		}
 		existingWeak = legacySourceIdentity(existingWeak)
 	}
+	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
+	existingAccount, err := sourceState(ctx, tx, "merge_account_identity")
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(existingAccount, "wa-store:") {
+		existingAccount = ""
+	}
+	if existingAccount != "" && existingAccount != accountIdentity {
+		legacyMatch := false
+		if accountIdentity != "" && existingStore != "" && existingStore == strings.TrimSpace(stats.SourceStoreIdentity) {
+			for _, candidate := range stats.LegacyAccountIDs {
+				if strings.TrimSpace(candidate) == existingAccount {
+					legacyMatch = true
+					break
+				}
+			}
+		}
+		continuity := false
+		if legacyMatch {
+			resolved, err := resolveReusedReactionIdentities(ctx, tx, false, messages)
+			if err != nil {
+				return "", err
+			}
+			for _, m := range resolved {
+				existing, found, err := messageBySourcePK(ctx, tx, m.SourcePK)
+				if err != nil {
+					return "", err
+				}
+				if found && !messageIdentityConflict(existing, m) {
+					continuity = true
+					break
+				}
+			}
+		}
+		if !continuity {
+			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
+		}
+	}
+	entityRows, err := archiveEntityRows(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	if existingAccount == "" && entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
+		return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
+	}
+	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
+	sameAccount := existingAccount != "" && existingAccount == accountIdentity
+	if existingStore != "" && incomingStore != existingStore && (!sameAccount || incomingStore == "") {
+		return "", errors.New("archive is bound to a different WhatsApp Desktop store; use a separate --db or import --restore")
+	}
 	if strongSource != "" && existingStrong != "" && strongSource != existingStrong {
 		return "", fmt.Errorf("archive is bound to WhatsApp source %q, not %q; use a separate --db or import --restore", existingStrong, strongSource)
 	}
-	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
-	if existingStore != "" && incomingStore != existingStore {
-		return "", errors.New("archive is bound to a different WhatsApp Desktop store; use a separate --db or import --restore")
-	}
 	if existingStrong == "" && existingWeak != "" && weakSource != existingWeak {
 		return "", fmt.Errorf("archive is bound to WhatsApp source path %q, not %q; use a separate --db or import --restore", existingWeak, weakSource)
-	}
-	matchingMessages := 0
-	for _, message := range messages {
-		existing, found, err := messageBySourcePK(ctx, tx, message.SourcePK)
-		if err != nil {
-			return "", err
-		}
-		if found && messageIdentityConflict(existing, message) {
-			return "", fmt.Errorf("message source_pk %d belongs to a different event; use a separate archive or import --restore", message.SourcePK)
-		}
-		if found {
-			matchingMessages++
-		}
-	}
-	accountIdentity := strings.TrimSpace(stats.AccountIdentity)
-	var existingAccount string
-	err = tx.QueryRowContext(ctx, `select value from sync_state where key='merge_account_identity'`).Scan(&existingAccount)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
-	}
-	existingAccount = strings.TrimSpace(existingAccount)
-	if strings.HasPrefix(existingAccount, "wa-store:") {
-		// Early schema-v2 builds mistook Core Data's persistent-store UUID for
-		// an account identity. It is only a source marker and cannot prove that
-		// a logout/login cycle kept the same WhatsApp account.
-		existingAccount = ""
-	}
-	if existingAccount != "" {
-		legacyMatch := false
-		for _, candidate := range stats.LegacyAccountIDs {
-			if strings.TrimSpace(candidate) == existingAccount {
-				legacyMatch = true
-				break
-			}
-		}
-		if accountIdentity == "" || (existingAccount != accountIdentity && (!legacyMatch || matchingMessages == 0)) {
-			return "", errors.New("archive is bound to a different WhatsApp account; use a separate --db or import --restore")
-		}
-	} else {
-		entityRows, err := archiveEntityRows(ctx, tx)
-		if err != nil {
-			return "", err
-		}
-		if entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
-			return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
-		}
 	}
 	if strongSource != "" {
 		return strongSource, nil
@@ -692,16 +761,13 @@ func validateImportMessages(messages []Message) error {
 	return nil
 }
 
-func prepareImportTombstones(now time.Time, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message) {
-	deletedChats := make(map[string]Tombstone)
+func prepareImportTombstones(now time.Time, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, aliases map[string]string) {
 	for i := range chats {
 		if chats[i].Removed && chats[i].DeletedAt.IsZero() {
 			chats[i].Tombstone = sourceTombstone(now, "whatsapp_removed")
 		}
-		if !chats[i].DeletedAt.IsZero() {
-			deletedChats[chats[i].JID] = chats[i].Tombstone
-		}
 	}
+	deletedChats := chatParentTombstones(chats, aliases)
 	deletedGroups := make(map[string]Tombstone)
 	for i := range groups {
 		if parent, ok := deletedChats[groups[i].JID]; ok && groups[i].DeletedAt.IsZero() {
@@ -725,11 +791,14 @@ func prepareImportTombstones(now time.Time, chats []Chat, groups []Group, partic
 	}
 }
 
-func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message) error {
+func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat, groups []Group, participants []GroupParticipant, messages []Message, aliases map[string]string) error {
 	liveChats := make(map[string]struct{})
 	for _, chat := range chats {
 		if chat.DeletedAt.IsZero() {
 			liveChats[chat.JID] = struct{}{}
+			if alias := aliases[chat.JID]; alias != "" {
+				liveChats[alias] = struct{}{}
+			}
 		}
 	}
 	for i := range groups {
@@ -768,6 +837,10 @@ func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat
 			participants[i].Tombstone = childTombstone(parent, "parent_group_deleted")
 		}
 	}
+	parents, err := storedChatParentTombstones(ctx, tx, aliases)
+	if err != nil {
+		return err
+	}
 	for i := range messages {
 		if !messages[i].DeletedAt.IsZero() {
 			continue
@@ -775,10 +848,7 @@ func prepareStoredParentTombstones(ctx context.Context, tx *sql.Tx, chats []Chat
 		if _, live := liveChats[messages[i].ChatJID]; live {
 			continue
 		}
-		parent, found, err := storedTombstone(ctx, tx, "chats", "jid", messages[i].ChatJID)
-		if err != nil {
-			return err
-		}
+		parent, found := parents[messages[i].ChatJID]
 		if found {
 			messages[i].Tombstone = childTombstone(parent, "parent_chat_deleted")
 		}
@@ -930,17 +1000,21 @@ func upsertMessage(ctx context.Context, tx *sql.Tx, m Message, observedAt time.T
 		if err != nil {
 			return err
 		}
-		incoming, err := canonicalMessageJSON(m)
+		incoming, err := observableMessageJSON(m)
 		if err != nil {
 			return err
 		}
-		if previous != incoming {
+		observablePrevious, err := observableMessageJSON(existing)
+		if err != nil {
+			return err
+		}
+		if observablePrevious != incoming || m.mediaContentChanged {
 			reason := "whatsapp_edit"
 			if !m.DeletedAt.IsZero() && existing.DeletedAt.IsZero() {
 				reason = m.DeletionReason
 			}
-			if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values(?,?,?,?,?)`,
-				existing.EventID, previous, unix(observedAt), "whatsapp-desktop", reason); err != nil {
+			if _, err := tx.ExecContext(ctx, `insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason,account_identity,source_store_identity,source_row_pk) values(?,?,?,?,?,?,?,?)`,
+				existing.EventID, previous, unix(observedAt), "whatsapp-desktop", reason, sourceAccount(m), sourceStore(m), revisionSourceRow(m)); err != nil {
 				return err
 			}
 		}
@@ -984,36 +1058,46 @@ func messageIdentityConflict(existing, incoming Message) bool {
 	return existing.ChatJID != incoming.ChatJID || existing.MessageID != incoming.MessageID || existing.FromMe != incoming.FromMe || messageUnix(existing) != messageUnix(incoming)
 }
 
-func tombstoneSubordinates(ctx context.Context, tx *sql.Tx, observedAt time.Time) error {
-	rows, err := tx.QueryContext(ctx, `select `+messageSelectColumns+` from messages m
-where m.deleted_at is null and exists (select 1 from chats c where c.jid=m.chat_jid and c.deleted_at is not null)`)
+func tombstoneSubordinates(ctx context.Context, tx *sql.Tx, observedAt time.Time, stats ImportStats) error {
+	// Parent lifecycle uses retained canonical contact evidence, just as reads
+	// do. Candidate matching above still requires a current input link.
+	contacts, err := readContactIdentities(ctx, tx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
-	var messages []Message
-	for rows.Next() {
-		m, err := scanMessage(rows)
+	parents, err := storedChatParentTombstones(ctx, tx, verifiedContactAliases(contacts))
+	if err != nil {
+		return err
+	}
+	if len(parents) > 0 {
+		rows, err := tx.QueryContext(ctx, `select `+messageSelectColumns+` from messages where deleted_at is null`)
 		if err != nil {
 			return err
 		}
-		messages = append(messages, m)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, m := range messages {
-		var deletedAt int64
-		var source string
-		if err := tx.QueryRowContext(ctx, `select deleted_at,coalesce(deletion_source,'whatsapp-desktop') from chats where jid=?`, m.ChatJID).Scan(&deletedAt, &source); err != nil {
+		defer func() { _ = rows.Close() }()
+		var messages []Message
+		for rows.Next() {
+			m, err := scanMessage(rows)
+			if err != nil {
+				return err
+			}
+			if parent, ok := parents[m.ChatJID]; ok {
+				m.Tombstone = childTombstone(parent, "parent_chat_deleted")
+				messages = append(messages, m)
+			}
+		}
+		if err := rows.Close(); err != nil {
 			return err
 		}
-		m.Tombstone = Tombstone{DeletedAt: fromUnix(deletedAt), DeletionSource: source, DeletionReason: "parent_chat_deleted", LastSeenAt: observedAt}
-		if err := upsertMessage(ctx, tx, m, observedAt); err != nil {
+		if err := rows.Err(); err != nil {
 			return err
+		}
+		for _, m := range messages {
+			m.LastSeenAt = observedAt
+			m.sourceMapping = &SourceMapping{AccountIdentity: stats.AccountIdentity, SourceStoreIdentity: stats.SourceStoreIdentity}
+			if err := upsertMessage(ctx, tx, m, observedAt); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `update groups set
@@ -1203,6 +1287,10 @@ func (s *Store) listChats(ctx context.Context, filter ChatFilter) ([]Chat, error
 }
 
 func (s *Store) Messages(ctx context.Context, filter MessageFilter) ([]Message, error) {
+	filter, err := s.withContactAliases(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	if filter.Limit <= 0 {
 		filter.Limit = 50
 	}
@@ -1266,6 +1354,10 @@ func filteredMessagesQuery(filter MessageFilter, extraColumns string) (string, [
 }
 
 func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, error) {
+	filter, err := s.withContactAliases(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(filter.Query) == "" {
 		return nil, errors.New("search query required")
 	}
@@ -1301,12 +1393,22 @@ func applyMessageFilters(query string, args []any, filter MessageFilter, joined 
 		query += " and " + prefix + "deleted_at is null"
 	}
 	if strings.TrimSpace(filter.ChatJID) != "" {
-		query += " and " + prefix + "chat_jid = ?"
-		args = append(args, filter.ChatJID)
+		if filter.chatAlias == "" {
+			query += " and " + prefix + "chat_jid = ?"
+			args = append(args, filter.ChatJID)
+		} else {
+			query += " and " + prefix + "chat_jid in (?,?)"
+			args = append(args, filter.ChatJID, filter.chatAlias)
+		}
 	}
 	if strings.TrimSpace(filter.Sender) != "" {
-		query += " and " + prefix + "sender_jid = ?"
-		args = append(args, filter.Sender)
+		if filter.senderAlias == "" {
+			query += " and " + prefix + "sender_jid = ?"
+			args = append(args, filter.Sender)
+		} else {
+			query += " and " + prefix + "sender_jid in (?,?)"
+			args = append(args, filter.Sender, filter.senderAlias)
+		}
 	}
 	if filter.After != nil {
 		query += " and " + prefix + "ts >= ?"

@@ -80,6 +80,7 @@ select
 	coalesce(business_name, '') as business_name,
 	coalesce(username, '') as username,
 	coalesce(lid, '') as lid,
+	lid_evidence,
 	coalesce(about_text, '') as about_text,
 	coalesce(updated_at, 0) as updated_at,
 	coalesce(deleted_at, 0) as deleted_at,

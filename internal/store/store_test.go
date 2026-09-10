@@ -616,7 +616,7 @@ func TestMergeAllRejectsDifferentSourceAndIdentityCollision(t *testing.T) {
 	collision.MessageID = "different"
 	collision.Text = "replacement"
 	if err := st.MergeAll(ctx, ImportStats{SourcePath: "/account-a", FinishedAt: now.Add(time.Minute), Messages: 1}, nil,
-		[]Chat{{JID: collision.ChatJID, Kind: "dm"}}, nil, nil, []Message{collision}); err == nil || !strings.Contains(err.Error(), "different event") {
+		[]Chat{{JID: collision.ChatJID, Kind: "dm"}}, nil, nil, []Message{collision}); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
 		t.Fatalf("identity collision error = %v", err)
 	}
 	stored, err := st.MessageBySourcePK(ctx, 1)
@@ -707,8 +707,8 @@ func TestMergeUpgradesAndChecksSourceStoreBinding(t *testing.T) {
 		t.Fatalf("missing established store error = %v", err)
 	}
 	base.SourceStoreIdentity = "wa-store:second"
-	if err := st.MergeAll(ctx, base, nil, nil, nil, nil, []Message{message}); err == nil || !strings.Contains(err.Error(), "different WhatsApp Desktop store") {
-		t.Fatalf("different store error = %v", err)
+	if err := st.MergeAll(ctx, base, nil, nil, nil, nil, []Message{message}); err != nil {
+		t.Fatalf("same account relogin error = %v", err)
 	}
 }
 

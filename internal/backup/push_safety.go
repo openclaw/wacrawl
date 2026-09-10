@@ -195,7 +195,7 @@ func validatePublicManifest(manifest ckbackup.Manifest) error {
 	}
 	for name, count := range manifest.Counts {
 		switch name {
-		case "contacts", "chats", "groups", "participants", "group_participants", "messages", "message_revisions", "archive_identity", "media_files":
+		case "contacts", "chats", "groups", "participants", "group_participants", "messages", "message_revisions", "archive_identity", "message_sources", "source_observations", "media_files":
 		default:
 			return errors.New("unpublished manifest contains an unknown count")
 		}
@@ -205,7 +205,7 @@ func validatePublicManifest(manifest ckbackup.Manifest) error {
 	}
 	for _, shard := range manifest.Shards {
 		switch shard.Table {
-		case "contacts", "chats", "groups", "group_participants", "messages", "message_revisions", "archive_identity", "_backup_files":
+		case "contacts", "chats", "groups", "group_participants", "messages", "message_revisions", "archive_identity", "message_sources", "source_observations", "_backup_files":
 		default:
 			return errors.New("unpublished manifest contains an unknown table")
 		}

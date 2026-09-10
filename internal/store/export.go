@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,8 +19,10 @@ type SnapshotData struct {
 	Participants        []GroupParticipant
 	Messages            []Message
 	Revisions           []MessageRevision
-	SourceStoreIdentity string `json:"source_store_identity,omitempty"`
-	AccountIdentity     string `json:"account_identity,omitempty"`
+	Sources             []SourceMapping     `json:"sources,omitempty"`
+	Observations        []SourceObservation `json:"observations,omitempty"`
+	SourceStoreIdentity string              `json:"source_store_identity,omitempty"`
+	AccountIdentity     string              `json:"account_identity,omitempty"`
 }
 
 func (d SnapshotData) ImportStats(sourcePath, dbPath string, finishedAt time.Time) ImportStats {
@@ -105,7 +108,15 @@ func exportSnapshot(ctx context.Context, db storedb.DBTX) (SnapshotData, error) 
 		}
 		accountIdentity = ""
 	}
-	return SnapshotData{Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, Revisions: revisions, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity}, nil
+	sources, err := readSources(ctx, db)
+	if err != nil {
+		return SnapshotData{}, err
+	}
+	observations, err := readObservations(ctx, db)
+	if err != nil {
+		return SnapshotData{}, err
+	}
+	return SnapshotData{Sources: sources, Observations: observations, Contacts: contacts, Chats: chats, Groups: groups, Participants: participants, Messages: messages, Revisions: revisions, SourceStoreIdentity: sourceStoreIdentity, AccountIdentity: accountIdentity}, nil
 }
 
 func syncStateValue(ctx context.Context, db storedb.DBTX, key string) (string, error) {
@@ -132,13 +143,16 @@ func (s *Store) Contacts(ctx context.Context) ([]Contact, error) {
 }
 
 func (s *Store) ImportSnapshot(ctx context.Context, data SnapshotData, sourcePath string, finishedAt time.Time) error {
+	if err := data.Validate(); err != nil {
+		return err
+	}
 	stats := data.ImportStats(sourcePath, s.Path(), finishedAt)
 	stats.Mode = "restore"
-	return s.importAll(ctx, true, stats, data.Contacts, data.Chats, data.Groups, data.Participants, data.Messages, data.Revisions)
+	return s.importAll(ctx, true, stats, data.Contacts, data.Chats, data.Groups, data.Participants, data.Messages, data.Revisions, data)
 }
 
 func exportMessageRevisions(ctx context.Context, db storedb.DBTX) ([]MessageRevision, error) {
-	rows, err := db.QueryContext(ctx, `select event_id,payload_json,recorded_at,event_source,reason from message_revisions order by id`)
+	rows, err := db.QueryContext(ctx, `select event_id,payload_json,recorded_at,event_source,reason,account_identity,source_store_identity,source_row_pk from message_revisions order by id`)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +161,7 @@ func exportMessageRevisions(ctx context.Context, db storedb.DBTX) ([]MessageRevi
 	for rows.Next() {
 		var revision MessageRevision
 		var recordedAt int64
-		if err := rows.Scan(&revision.EventID, &revision.PayloadJSON, &recordedAt, &revision.EventSource, &revision.Reason); err != nil {
+		if err := rows.Scan(&revision.EventID, &revision.PayloadJSON, &recordedAt, &revision.EventSource, &revision.Reason, &revision.AccountIdentity, &revision.SourceStoreIdentity, &revision.SourceRowPK); err != nil {
 			return nil, err
 		}
 		revision.RecordedAt = fromUnix(recordedAt)
@@ -163,7 +177,14 @@ func exportContacts(ctx context.Context, q *storedb.Queries) ([]Contact, error) 
 	}
 	out := make([]Contact, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, contactFromRow(row))
+		c := contactFromRow(row)
+		if err := json.Unmarshal([]byte(row.LidEvidence), &c.LIDEvidence); err != nil {
+			return nil, err
+		}
+		if err := validateLIDEvidence(c.LIDEvidence); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	return out, nil
 }
@@ -205,6 +226,17 @@ func exportParticipants(ctx context.Context, q *storedb.Queries) ([]GroupPartici
 }
 
 func (d SnapshotData) Validate() error {
+	if err := validateContactIdentities(d.Contacts); err != nil {
+		return err
+	}
+	contacts := map[string]bool{}
+	for _, c := range d.Contacts {
+		if contacts[c.JID] {
+			return fmt.Errorf("duplicate contact JID %q", c.JID)
+		}
+		contacts[c.JID] = true
+	}
+
 	if d.AccountIdentity != "" && !strings.HasPrefix(d.AccountIdentity, "wa-account:") {
 		return errors.New("invalid WhatsApp account identity")
 	}
@@ -237,6 +269,32 @@ func (d SnapshotData) Validate() error {
 		if revision.PayloadJSON == "" || revision.EventSource == "" || revision.Reason == "" {
 			return fmt.Errorf("message revision %q is incomplete", revision.EventID)
 		}
+	}
+	sources := map[string]SourceMapping{}
+	for _, source := range d.Sources {
+		if source.AccountIdentity == "" || source.AccountIdentity != d.AccountIdentity || source.SourceStoreIdentity == "" || source.SourceRowPK == 0 || source.Discriminator == "" || source.MatchKind == "" {
+			return errors.New("incomplete or mismatched source mapping")
+		}
+		if _, ok := events[source.EventID]; !ok {
+			return errors.New("source mapping references unknown event")
+		}
+		key := mappingKey(source)
+		if _, ok := sources[key]; ok {
+			return errors.New("duplicate source mapping")
+		}
+		sources[key] = source
+	}
+	observations := map[string]bool{}
+	for _, observation := range d.Observations {
+		source, ok := sources[mappingKey(observation.SourceMapping)]
+		if !ok || source != observation.SourceMapping || !json.Valid([]byte(observation.PayloadJSON)) {
+			return errors.New("invalid source observation")
+		}
+		key := mappingKey(source) + observation.PayloadJSON
+		if observations[key] {
+			return errors.New("duplicate source observation")
+		}
+		observations[key] = true
 	}
 	return nil
 }

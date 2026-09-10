@@ -18,7 +18,7 @@ type exportBarrier struct {
 }
 
 func TestAuditExportErrorsReturnNoPartialSnapshot(t *testing.T) {
-	for _, stage := range []string{"contacts", "chats", "groups", "participants", "messages", "revisions", "source-binding", "revision-scan", "canceled"} {
+	for _, stage := range []string{"contacts", "chats", "groups", "participants", "messages", "revisions", "source-binding", "revision-scan", "sources", "observations", "canceled"} {
 		t.Run(stage, func(t *testing.T) {
 			ctx := context.Background()
 			st, err := Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
@@ -46,11 +46,15 @@ func TestAuditExportErrorsReturnNoPartialSnapshot(t *testing.T) {
 			case "participants":
 				query = "drop table group_participants"
 			case "messages":
-				query = "drop table messages"
+				query = "delete from source_observations; delete from message_sources; drop table messages"
 			case "revisions":
 				query = "drop table message_revisions"
 			case "source-binding":
 				query = "alter table sync_state rename to retained_sync_state"
+			case "sources":
+				query = "drop table source_observations; drop table message_sources"
+			case "observations":
+				query = "drop table source_observations"
 			case "revision-scan":
 				query = "insert into message_revisions(event_id,payload_json,recorded_at,event_source,reason) values('wa:1','{}','not-an-integer','synthetic','edit')"
 			}
@@ -123,6 +127,10 @@ func TestAuditExportSnapshotIncludesBindingAndAllRows(t *testing.T) {
 	if err := reader.ImportSnapshot(ctx, before, "synthetic", time.Unix(2, 0)); err != nil {
 		t.Fatal(err)
 	}
+	baseline, err := reader.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writer, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +168,9 @@ func TestAuditExportSnapshotIncludesBindingAndAllRows(t *testing.T) {
 		len(got.Participants) != 1 || got.Participants[0].ContactName != "before" ||
 		len(got.Messages) != 1 || got.Messages[0].Text != "before" {
 		t.Fatalf("mixed snapshot: %+v", got)
+	}
+	if !reflect.DeepEqual(got.Sources, baseline.Sources) || !reflect.DeepEqual(got.Observations, baseline.Observations) {
+		t.Fatal("provenance escaped the export transaction")
 	}
 	current, err := reader.ExportAll(ctx)
 	if err != nil {

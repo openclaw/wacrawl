@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1026,4 +1027,81 @@ func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) 
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+func TestEncryptedReloginProvenanceRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	source := openFixtureStore(t, "source.db")
+	now := time.Unix(1750000000, 0).UTC()
+	message := store.Message{SourcePK: 1, ChatJID: "chat", MessageID: "one", SenderJID: "sender", Timestamp: now, Text: "first"}
+	stats := store.ImportStats{SourceIdentity: "/source", SourceStoreIdentity: "wa-store:first", AccountIdentity: "wa-account:owner", FinishedAt: now}
+	if err := source.MergeAll(ctx, stats, nil, nil, nil, nil, []store.Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	message.Text = "edited before account normalization"
+	if err := source.MergeAll(ctx, stats, nil, nil, nil, nil, []store.Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	stats.LegacyAccountIDs = []string{stats.AccountIdentity}
+	stats.AccountIdentity = "wa-account:normalized"
+	if err := source.MergeAll(ctx, stats, nil, nil, nil, nil, []store.Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"second", "third"} {
+		stats.SourceStoreIdentity = "wa-store:" + id
+		message.SourcePK++
+		message.Text = id
+		if err := source.MergeAll(ctx, stats, nil, nil, nil, nil, []store.Message{message}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := source.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	initBareRemote(t, remote)
+	config := filepath.Join(t.TempDir(), "backup.json")
+	if _, _, err := Init(ctx, Options{ConfigPath: config, Repo: filepath.Join(t.TempDir(), "backup"), Remote: remote, Identity: filepath.Join(t.TempDir(), "age.key"), Push: false}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Push(ctx, source, Options{ConfigPath: config, Push: true}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := Status(ctx, Options{ConfigPath: config})
+	if err != nil || manifest.Counts.Sources != len(before.Sources) || manifest.Counts.Observations != len(before.Observations) {
+		t.Fatalf("published provenance counts: %+v %v", manifest.Counts, err)
+	}
+	restored := openFixtureStore(t, "restored.db")
+	if _, err := Pull(ctx, restored, Options{ConfigPath: config}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := restored.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("encrypted backup lost source/revision provenance")
+	}
+	if len(after.Sources) != 3 || len(after.Revisions) != 3 || len(after.Observations) != 4 {
+		t.Fatalf("wrong provenance counts %d %d %d", len(after.Sources), len(after.Revisions), len(after.Observations))
+	}
+	for _, revision := range after.Revisions {
+		if revision.AccountIdentity != stats.AccountIdentity {
+			t.Fatal("backup retained stale revision account identity")
+		}
+	}
+	if err := restored.MergeAll(ctx, stats, nil, nil, nil, nil, []store.Message{message}); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := restored.ExportAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, repeated) {
+		t.Fatal("restored source mapping not idempotent")
+	}
+	if result, err := Push(ctx, restored, Options{ConfigPath: config, Push: true}); err != nil || result.Changed {
+		t.Fatalf("restored no-op import changed backup: %v %+v", err, result)
+	}
 }
