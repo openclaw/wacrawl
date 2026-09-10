@@ -105,12 +105,28 @@ Each machine that restores the backup should have its own age identity. On the n
 
 Keep a recovery copy of each `~/.wacrawl/age.key` in a password manager. Never commit the identity or paste it into issues, logs, documentation, or chat.
 
+## Upgrading archive and backup readers
+
+The cumulative-relogin/contact-evidence build uses archive schema 5 and upgrades an existing schema-3 or schema-4 archive when it opens the database, including for a read command. Older schema-3 builds (including v0.3.11) cannot reopen the upgraded archive. New backups also contain source-provenance tables that schema-3 backup readers reject. Experimental schema-4 backup readers silently ignore the new contact-link evidence field and can discard conflict history on restore or re-export. They must also be upgraded before reading or writing schema-5 backups. SQLite version checks reject newer databases, but the existing backup format has no minimum-reader negotiation; do not rely on a backup error to protect mixed-version use. This is a reader-version requirement, not a decryption failure.
+
+Before upgrading:
+
+1. Keep the previous executable and a consistent pre-upgrade database snapshot together with its copied `media/` directory. Stop archive writers while making a filesystem copy, or use SQLite's backup API; copying only a live database file can omit its WAL transactions.
+2. Preserve a pre-upgrade encrypted snapshot and its commit or tag, plus the matching private age identity and backup configuration. A tag identifies the snapshot; it does not make its format compatible with an older reader.
+3. Upgrade every machine that reads or writes this backup to a build containing the cumulative-relogin format and contact-evidence support before publishing its first new snapshot. Until a release contains those changes, use the same reviewed source revision on all machines; the previous Homebrew release is insufficient.
+4. First test migration and encrypted restoration into separate archive paths. Verify history, revisions, source provenance and copied media, then repeat an unchanged import and backup. Keep using the existing primary archive after acceptance; validation copies are not additional active archives.
+
+The new reader accepts earlier backups and reconstructs evidence only from records actually present. Older snapshots cannot contain provenance they never recorded. Never delete unfamiliar shards, lower SQLite's `user_version`, or strip provenance to make an old reader accept a new snapshot.
+
+For rollback, stop upgraded writers and use the previous executable with the preserved pre-upgrade database/media pair, or restore the preserved old-format snapshot into a separate database using a compatible reader. Keep the upgraded archive and newer backup generations intact: rollback restores the earlier point in time and does not include messages collected afterward. Do not pull an old snapshot over the only current archive.
+
 ## Recovery checklist
 
 On a new machine:
 
 ```bash
 brew install openclaw/tap/wacrawl
+# Confirm this build supports the archive/backup format before restoring.
 git clone <git-url> ~/Projects/backup-wacrawl
 mkdir -p ~/.wacrawl
 ```
