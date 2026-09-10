@@ -93,6 +93,7 @@ type Contact struct {
 	LastName     string
 	BusinessName string
 	Username     string
+	LIDEvidence  []ContactLIDEvidence `json:"lid_evidence,omitempty"`
 	LID          string
 	AboutText    string
 	UpdatedAt    time.Time

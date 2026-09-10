@@ -33,6 +33,7 @@ type Contact struct {
 	BusinessName   sql.NullString
 	Username       sql.NullString
 	Lid            sql.NullString
+	LidEvidence    string
 	AboutText      sql.NullString
 	UpdatedAt      sql.NullInt64
 	DeletedAt      sql.NullInt64

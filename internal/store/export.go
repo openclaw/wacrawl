@@ -177,7 +177,14 @@ func exportContacts(ctx context.Context, q *storedb.Queries) ([]Contact, error) 
 	}
 	out := make([]Contact, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, contactFromRow(row))
+		c := contactFromRow(row)
+		if err := json.Unmarshal([]byte(row.LidEvidence), &c.LIDEvidence); err != nil {
+			return nil, err
+		}
+		if err := validateLIDEvidence(c.LIDEvidence); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	return out, nil
 }
@@ -219,6 +226,17 @@ func exportParticipants(ctx context.Context, q *storedb.Queries) ([]GroupPartici
 }
 
 func (d SnapshotData) Validate() error {
+	if err := validateContactIdentities(d.Contacts); err != nil {
+		return err
+	}
+	contacts := map[string]bool{}
+	for _, c := range d.Contacts {
+		if contacts[c.JID] {
+			return fmt.Errorf("duplicate contact JID %q", c.JID)
+		}
+		contacts[c.JID] = true
+	}
+
 	if d.AccountIdentity != "" && !strings.HasPrefix(d.AccountIdentity, "wa-account:") {
 		return errors.New("invalid WhatsApp account identity")
 	}

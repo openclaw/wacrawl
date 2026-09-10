@@ -3,8 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
+
+	"github.com/openclaw/wacrawl/internal/store/storedb"
 )
 
 // Only explicit PN/LID contact fields are evidence. The authoritative LID
@@ -12,19 +17,30 @@ import (
 // message overlap never establish links.
 func verifiedContactAliases(contacts []Contact) map[string]string {
 	edges := map[string]map[string]bool{}
+	live := map[string]bool{}
 	for _, c := range contacts {
-		lid := normalizedContactLID(c.LID)
-		if !c.DeletedAt.IsZero() || !contactPN(c.JID) || lid == "" {
+		if !c.DeletedAt.IsZero() {
 			continue
 		}
-		if edges[c.JID] == nil {
-			edges[c.JID] = map[string]bool{}
+		live[c.JID] = true
+	}
+	for _, c := range contacts {
+		evidence := append([]ContactLIDEvidence(nil), c.LIDEvidence...)
+		evidence = append(evidence, ContactLIDEvidence{LID: c.LID})
+		for _, observation := range evidence {
+			lid := normalizedContactLID(observation.LID)
+			if !contactPN(c.JID) || lid == "" {
+				continue
+			}
+			if edges[c.JID] == nil {
+				edges[c.JID] = map[string]bool{}
+			}
+			if edges[lid] == nil {
+				edges[lid] = map[string]bool{}
+			}
+			edges[c.JID][lid] = true
+			edges[lid][c.JID] = true
 		}
-		if edges[lid] == nil {
-			edges[lid] = map[string]bool{}
-		}
-		edges[c.JID][lid] = true
-		edges[lid][c.JID] = true
 	}
 	aliases := map[string]string{}
 	for id, peers := range edges {
@@ -32,7 +48,7 @@ func verifiedContactAliases(contacts []Contact) map[string]string {
 			continue
 		}
 		for peer := range peers {
-			if len(edges[peer]) == 1 {
+			if len(edges[peer]) == 1 && (live[id] && contactPN(id) || live[peer] && contactPN(peer)) {
 				aliases[id] = peer
 			}
 		}
@@ -51,7 +67,7 @@ func contactLID(id string) bool {
 }
 
 func readContactIdentities(ctx context.Context, db sourceReader) ([]Contact, error) {
-	rows, err := db.QueryContext(ctx, `select jid,coalesce(lid,''),coalesce(deleted_at,0) from contacts`)
+	rows, err := db.QueryContext(ctx, `select jid,coalesce(lid,''),coalesce(deleted_at,0),lid_evidence from contacts`)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +76,14 @@ func readContactIdentities(ctx context.Context, db sourceReader) ([]Contact, err
 	for rows.Next() {
 		var c Contact
 		var deleted int64
-		if err := rows.Scan(&c.JID, &c.LID, &deleted); err != nil {
+		var evidence string
+		if err := rows.Scan(&c.JID, &c.LID, &deleted, &evidence); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(evidence), &c.LIDEvidence); err != nil {
+			return nil, fmt.Errorf("contact %q LID evidence: %w", c.JID, err)
+		}
+		if err := validateLIDEvidence(c.LIDEvidence); err != nil {
 			return nil, err
 		}
 		c.DeletedAt = fromUnix(deleted)
@@ -69,44 +92,165 @@ func readContactIdentities(ctx context.Context, db sourceReader) ([]Contact, err
 	return contacts, rows.Err()
 }
 
-// Import candidates require an input contact link. Also exclude links that
-// would conflict in the resulting canonical contacts, so reads and imports
-// agree. Duplicate input JIDs cannot become aliases by last-writer wins.
-func prepareContactIdentities(ctx context.Context, tx *sql.Tx, input []Contact) (map[string]string, error) {
-	aliases := verifiedContactAliases(input)
-	existing, err := readContactIdentities(ctx, tx)
-	if err != nil {
-		return nil, err
+// Import candidates need a current input link and a consistent retained graph.
+func prepareContactIdentities(ctx context.Context, tx *sql.Tx, input []Contact, stats ImportStats, restore, snapshot bool) ([]Contact, map[string]string, error) {
+	var existing []Contact
+	var err error
+	if !restore {
+		existing, err = exportContacts(ctx, storedb.New(tx))
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	projected := map[string]Contact{}
 	for _, c := range existing {
 		projected[c.JID] = c
 	}
+	original := map[string]Contact{}
+	for _, c := range existing {
+		original[c.JID] = c
+	}
+	first := map[string]string{}
+	conflicting := map[string]bool{}
 	for _, c := range input {
-		if old, ok := projected[c.JID]; ok {
-			if old.LID != "" && c.LID != "" && !sameContactLID(old.LID, c.LID) {
-				return nil, fmt.Errorf("contact %q has contradictory archived LID %q and incoming LID %q; import unchanged", c.JID, old.LID, c.LID)
+		if lid, ok := first[c.JID]; ok && !sameContactLID(lid, c.LID) {
+			conflicting[c.JID] = true
+		} else if !ok {
+			first[c.JID] = c.LID
+		}
+	}
+	current := make([]Contact, 0, len(input))
+	for _, c := range input {
+		current = append(current, Contact{JID: c.JID, LID: c.LID, Tombstone: c.Tombstone})
+		old := projected[c.JID]
+		evidence := append([]ContactLIDEvidence(nil), old.LIDEvidence...)
+		if old.LID != "" && !hasRawLID(evidence, old.LID) {
+			evidence = mergeLIDEvidence(evidence, ContactLIDEvidence{LID: old.LID})
+		}
+		evidence = mergeLIDEvidence(evidence, c.LIDEvidence...)
+		if c.LID != "" {
+			observed := ContactLIDEvidence{LID: c.LID}
+			// Exact snapshots already carry observations; legacy snapshots have unknown origin.
+			if !snapshot {
+				observed.SourceStoreIdentity, observed.FirstObservedAt = stats.SourceStoreIdentity, stats.FinishedAt
 			}
-			if c.LID == "" {
-				c.LID = old.LID
-			}
-			if !old.DeletedAt.IsZero() {
-				c.DeletedAt = old.DeletedAt
+			if !snapshot || !hasRawLID(evidence, c.LID) {
+				evidence = mergeLIDEvidence(evidence, observed)
 			}
 		}
+		c.LIDEvidence = evidence
+		if c.LID == "" {
+			c.LID = old.LID
+		}
+		if !old.DeletedAt.IsZero() {
+			c.DeletedAt = old.DeletedAt
+		}
 		projected[c.JID] = c
+	}
+	for jid := range conflicting {
+		evidence := projected[jid].LIDEvidence
+		retained := original[jid]
+		retained.JID, retained.LIDEvidence = jid, evidence
+		projected[jid] = retained
 	}
 	resulting := make([]Contact, 0, len(projected))
 	for _, c := range projected {
 		resulting = append(resulting, c)
 	}
 	consistent := verifiedContactAliases(resulting)
+	aliases := verifiedContactAliases(current)
 	for id, peer := range aliases {
 		if consistent[id] != peer {
 			delete(aliases, id)
 		}
 	}
-	return aliases, nil
+	resolved := make([]Contact, 0, len(input))
+	seen := map[string]bool{}
+	for _, c := range input {
+		if !seen[c.JID] {
+			resolved = append(resolved, projected[c.JID])
+			seen[c.JID] = true
+		}
+	}
+	return resolved, aliases, nil
+}
+
+// ContactLIDEvidence is a sourced raw field observation. A zero observation time
+// or empty store means unknown legacy provenance, not an inferred source event.
+type ContactLIDEvidence struct {
+	LID                 string    `json:"lid"`
+	SourceStoreIdentity string    `json:"source_store_identity,omitempty"`
+	FirstObservedAt     time.Time `json:"first_observed_at,omitempty"`
+}
+
+func hasRawLID(evidence []ContactLIDEvidence, lid string) bool {
+	for _, e := range evidence {
+		if e.LID == lid {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeLIDEvidence(evidence []ContactLIDEvidence, incoming ...ContactLIDEvidence) []ContactLIDEvidence {
+	for _, e := range incoming {
+		found := false
+		for _, old := range evidence {
+			if old.LID == e.LID && old.SourceStoreIdentity == e.SourceStoreIdentity {
+				found = true
+				break
+			}
+		}
+		if !found {
+			evidence = append(evidence, e)
+		}
+	}
+	sort.Slice(evidence, func(i, j int) bool {
+		if evidence[i].LID != evidence[j].LID {
+			return evidence[i].LID < evidence[j].LID
+		}
+		return evidence[i].SourceStoreIdentity < evidence[j].SourceStoreIdentity
+	})
+	return evidence
+}
+
+func validateLIDEvidence(evidence []ContactLIDEvidence) error {
+	seen := map[[2]string]bool{}
+	for _, e := range evidence {
+		key := [2]string{e.LID, e.SourceStoreIdentity}
+		if e.LID == "" || (e.SourceStoreIdentity != "" && !strings.HasPrefix(e.SourceStoreIdentity, "wa-store:")) || (!e.FirstObservedAt.IsZero() && (!validUnixTimestamp(e.FirstObservedAt.Unix()) || e.FirstObservedAt.Unix() == 0)) {
+			return fmt.Errorf("invalid contact LID evidence")
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate contact LID evidence")
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func migrateContactEvidence(ctx context.Context, tx *sql.Tx) error {
+	if err := ensureColumn(ctx, tx, "contacts", "lid_evidence", "text not null default '[]'"); err != nil {
+		return err
+	}
+	contacts, err := readContactIdentities(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, c := range contacts {
+		if c.LID == "" || hasRawLID(c.LIDEvidence, c.LID) {
+			continue
+		}
+		evidence := mergeLIDEvidence(c.LIDEvidence, ContactLIDEvidence{LID: c.LID})
+		payload, err := json.Marshal(evidence)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `update contacts set lid_evidence=? where jid=?`, string(payload), c.JID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func normalizedContactMessage(m Message, aliases map[string]string) Message {
@@ -136,12 +280,10 @@ func (s *Store) withContactAliases(ctx context.Context, filter MessageFilter) (M
 }
 
 func validateContactIdentities(contacts []Contact) error {
-	seen := map[string]string{}
 	for _, c := range contacts {
-		if previous, ok := seen[c.JID]; ok && !sameContactLID(previous, c.LID) {
-			return fmt.Errorf("contact %q has contradictory LID values %q and %q in the same import", c.JID, previous, c.LID)
+		if err := validateLIDEvidence(c.LIDEvidence); err != nil {
+			return err
 		}
-		seen[c.JID] = c.LID
 	}
 	return nil
 }

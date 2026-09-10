@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -42,7 +43,7 @@ func (s *Store) ValidateImport(ctx context.Context, stats ImportStats, messages 
 			stats.AccountIdentity = existingAccount
 		}
 	}
-	aliases, err := prepareContactIdentities(ctx, tx, contacts)
+	_, aliases, err := prepareContactIdentities(ctx, tx, contacts, stats, restore, false)
 	if err != nil {
 		return err
 	}
@@ -86,12 +87,12 @@ delete from sync_state;`); err != nil {
 			return err
 		}
 	}
-	var aliases map[string]string
-	if !restore {
-		aliases, err = prepareContactIdentities(ctx, tx, contacts)
-		if err != nil {
-			return err
-		}
+	if stats.FinishedAt.IsZero() {
+		stats.FinishedAt = time.Now().UTC()
+	}
+	contacts, aliases, err := prepareContactIdentities(ctx, tx, contacts, stats, restore, len(provenance) > 0)
+	if err != nil {
+		return err
 	}
 	messages, err = resolveImportMessages(ctx, tx, restore, stats, messages, aliases)
 	if err != nil {
@@ -119,19 +120,23 @@ delete from sync_state;`); err != nil {
 	}
 	for _, c := range contacts {
 		t := normalizedTombstone(c.Tombstone, now)
+		evidence, err := json.Marshal(c.LIDEvidence)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `insert into contacts(
-jid, phone, full_name, first_name, last_name, business_name, username, lid, about_text, updated_at,
+jid, phone, full_name, first_name, last_name, business_name, username, lid, lid_evidence, about_text, updated_at,
 deleted_at, deletion_source, deletion_reason, last_seen_at)
-values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 on conflict(jid) do update set
 phone=excluded.phone, full_name=excluded.full_name, first_name=excluded.first_name,
 last_name=excluded.last_name, business_name=excluded.business_name, username=excluded.username,
-lid=case when excluded.lid is null or excluded.lid='' then contacts.lid else excluded.lid end, about_text=excluded.about_text, updated_at=excluded.updated_at,
+lid=case when excluded.lid is null or excluded.lid='' then contacts.lid else excluded.lid end, lid_evidence=excluded.lid_evidence, about_text=excluded.about_text, updated_at=excluded.updated_at,
 deleted_at=case when contacts.deleted_at is not null then contacts.deleted_at else excluded.deleted_at end,
 deletion_source=case when contacts.deleted_at is not null then contacts.deletion_source else excluded.deletion_source end,
 deletion_reason=case when contacts.deleted_at is not null then contacts.deletion_reason else excluded.deletion_reason end,
 last_seen_at=excluded.last_seen_at`,
-			c.JID, c.Phone, c.FullName, c.FirstName, c.LastName, c.BusinessName, c.Username, c.LID, c.AboutText, unix(c.UpdatedAt),
+			c.JID, c.Phone, c.FullName, c.FirstName, c.LastName, c.BusinessName, c.Username, c.LID, string(evidence), c.AboutText, unix(c.UpdatedAt),
 			nullableUnix(t.DeletedAt), nullableString(t.DeletionSource), nullableString(t.DeletionReason), unix(t.LastSeenAt)); err != nil {
 			return err
 		}

@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 func (s *Store) migrate(ctx context.Context) error {
 	var current int
@@ -65,6 +65,9 @@ begin select raise(abort, 'messages.event_id is required'); end;`); err != nil {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {                                                                                    //nolint:gosec // table is from the fixed list above.
 			return fmt.Errorf("backfill %s last_seen_at: %w", table, err)
 		}
+	}
+	if err := migrateContactEvidence(ctx, tx); err != nil {
+		return err
 	}
 	if err := migrateSources(ctx, tx); err != nil {
 		return err

@@ -26,6 +26,7 @@ create table contacts (
 	business_name text,
 	username text,
 	lid text,
+	lid_evidence text not null default '[]',
 	about_text text,
 	updated_at integer,
 	deleted_at integer,

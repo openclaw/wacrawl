@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 )
@@ -183,28 +182,6 @@ func TestContactAliasLinksAreSymmetricWithoutTransitiveGuessing(t *testing.T) {
 	}
 }
 
-func TestContradictoryInputContactLIDsRejectAtomically(t *testing.T) {
-	ctx := context.Background()
-	st := reloginStore(t)
-	mergeContactLogin(t, st, "first", []Contact{{JID: aliasPN, LID: aliasLID}}, aliasMessage(1, "original", aliasPN))
-	before := snapshotRelogin(t, st)
-	contacts := []Contact{{JID: aliasPN, LID: aliasLID}, {JID: aliasPN, LID: "901@lid"}}
-	messages := []Message{aliasMessage(2, "new", aliasLID)}
-	stats := reloginStats("second")
-	for _, err := range []error{
-		st.ValidateImport(ctx, stats, messages, false, contacts...),
-		st.MergeAll(ctx, stats, contacts, nil, nil, nil, messages),
-		st.ReplaceAll(ctx, stats, contacts, nil, nil, nil, messages),
-	} {
-		if err == nil || !strings.Contains(err.Error(), "contradictory LID values") {
-			t.Fatalf("expected precise contact contradiction, got %v", err)
-		}
-	}
-	if got := snapshotRelogin(t, st); !reflect.DeepEqual(before, got) {
-		t.Fatal("contradictory contacts changed archive")
-	}
-}
-
 func TestBareAuthoritativeContactLIDUnifiesWithoutChangingRawContact(t *testing.T) {
 	st := reloginStore(t)
 	contacts := []Contact{{JID: aliasPN, LID: "900"}}
@@ -233,23 +210,6 @@ func TestBareAuthoritativeContactLIDUnifiesWithoutChangingRawContact(t *testing.
 	}
 }
 
-func TestChangedArchivedContactLIDRejectsWithoutLosingEvidence(t *testing.T) {
-	st := reloginStore(t)
-	mergeContactLogin(t, st, "first", []Contact{{JID: aliasPN, LID: "900"}}, aliasMessage(1, "shared", aliasPN))
-	before := snapshotRelogin(t, st)
-	contacts := []Contact{{JID: aliasPN, LID: "901@lid"}}
-	messages := []Message{aliasMessage(2, "shared", "901@lid")}
-	stats := reloginStats("second")
-	for _, err := range []error{st.ValidateImport(context.Background(), stats, messages, false, contacts...), st.MergeAll(context.Background(), stats, contacts, nil, nil, nil, messages)} {
-		if err == nil || !strings.Contains(err.Error(), "contradictory archived LID") {
-			t.Fatalf("expected archived link contradiction, got %v", err)
-		}
-	}
-	if got := snapshotRelogin(t, st); !reflect.DeepEqual(before, got) {
-		t.Fatal("contact conflict overwrote source data or history")
-	}
-}
-
 func TestEmptyContactUpdateRetainsEvidenceButCannotAuthorizeMatching(t *testing.T) {
 	st := reloginStore(t)
 	mergeContactLogin(t, st, "first", []Contact{{JID: aliasPN, LID: "900"}}, aliasMessage(1, "shared", aliasPN))
@@ -260,11 +220,9 @@ func TestEmptyContactUpdateRetainsEvidenceButCannotAuthorizeMatching(t *testing.
 		t.Fatal("empty source link erased evidence or authorized alias matching")
 	}
 	changed := []Contact{{JID: aliasPN, LID: "901@lid"}}
-	if err := st.MergeAll(context.Background(), reloginStats("third"), changed, nil, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "contradictory archived LID") {
-		t.Fatalf("empty intermediate update bypassed conflict guard: %v", err)
-	}
-	if got := snapshotRelogin(t, st); !reflect.DeepEqual(before, got) {
-		t.Fatal("conflicting update changed retained evidence")
+	mergeContactLogin(t, st, "third", changed)
+	if got := snapshotRelogin(t, st); len(got.Contacts[0].LIDEvidence) != 2 {
+		t.Fatal("empty intermediate update lost earlier evidence")
 	}
 	deleted := empty
 	deleted[0].DeletedAt = reloginStats("third").FinishedAt
