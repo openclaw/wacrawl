@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/openclaw/wacrawl/internal/store"
+	"github.com/openclaw/wacrawl/internal/testutil"
 	_ "modernc.org/sqlite"
 )
 
@@ -767,7 +768,7 @@ insert into ZWAGROUPMEMBER values (2, 2, '222@lid', 'Alice Duplicate', 'Alicia',
 
 func TestImportDesktopReadsMediaLinkedByMessage(t *testing.T) {
 	ctx := context.Background()
-	source := t.TempDir()
+	source := testutil.TempDir(t)
 	createFixtureDBs(t, source)
 
 	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
@@ -899,7 +900,7 @@ func TestCleanDesktopMediaRel(t *testing.T) {
 
 func TestImportDesktopCopyMedia(t *testing.T) {
 	ctx := context.Background()
-	source := t.TempDir()
+	source := testutil.TempDir(t)
 	createFixtureDBs(t, source)
 	mediaPath := filepath.Join(source, "Message", "Media", "123@g.us", "a", "test.jpg")
 	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o700); err != nil {
@@ -921,7 +922,7 @@ insert into ZWAMESSAGE values (5, 2, 1, 2, 'missing-media', 0, 700000004, 'missi
 		t.Fatal(err)
 	}
 
-	archivePath := filepath.Join(t.TempDir(), "archive.db")
+	archivePath := filepath.Join(testutil.TempDir(t), "archive.db")
 	archive, err := store.Open(ctx, archivePath)
 	if err != nil {
 		t.Fatal(err)
@@ -1004,8 +1005,8 @@ func TestResolveDesktopMediaPathPrefersMessageMedia(t *testing.T) {
 }
 
 func TestCopyArchiveMediaDeduplicatesAndConfinesPaths(t *testing.T) {
-	source := t.TempDir()
-	mediaRoot := filepath.Join(t.TempDir(), "media")
+	source := testutil.TempDir(t)
+	mediaRoot := filepath.Join(testutil.TempDir(t), "media")
 	mediaPath := filepath.Join(source, "Message", "Media", "chat", "photo.jpg")
 	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o700); err != nil {
 		t.Fatal(err)
@@ -1339,7 +1340,7 @@ func TestCanonicalSourcePath(t *testing.T) {
 	if path != want {
 		t.Fatalf("canonical path = %q, want %q", path, want)
 	}
-	missing := filepath.Join(t.TempDir(), "missing")
+	missing := filepath.Join(testutil.TempDir(t), "missing")
 	path, err = canonicalSourcePath(missing)
 	if err != nil {
 		t.Fatal(err)

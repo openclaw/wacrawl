@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/openclaw/wacrawl/internal/testutil"
 )
 
 func TestConfinedMediaRead(t *testing.T) {
@@ -40,7 +42,7 @@ func TestConfinedMediaRead(t *testing.T) {
 }
 
 func TestResolvePreservesOSPathMeaning(t *testing.T) {
-	base := t.TempDir()
+	base := testutil.TempDir(t)
 	t.Chdir(base)
 	target := filepath.Join(base, "target")
 	if err := os.MkdirAll(filepath.Join(target, "child"), 0o700); err != nil {
@@ -103,7 +105,9 @@ func TestMediaRejectsAliasesAndSpecialFiles(t *testing.T) {
 	}
 	// A Unix socket exercises nonregular refusal without a blocking read.
 	socket := filepath.Join(root, "socket")
-	listener, err := net.Listen("unix", socket)
+	// Bind relatively so long test directories do not exceed sockaddr_un.
+	t.Chdir(root)
+	listener, err := net.Listen("unix", "socket")
 	if err != nil {
 		t.Fatal(err)
 	}
