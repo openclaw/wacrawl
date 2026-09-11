@@ -37,7 +37,7 @@ test-race:
 
 fmt:
 	@set -e; \
-	changed="$$(GOWORK=off go run mvdan.cc/gofumpt@v0.11.0 -l .)"; \
+	changed="$$(GOWORK=off go run mvdan.cc/gofumpt@v0.12.0 -l .)"; \
 	if [ -n "$$changed" ]; then printf 'gofumpt wants changes in:\n%s\n' "$$changed"; exit 1; fi
 
 lint:
@@ -47,7 +47,7 @@ lint:
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' 0; \
-	GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.49.0 -test ./... > "$$output_file"; \
+	GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... > "$$output_file"; \
 	if [ -s "$$output_file" ]; then cat "$$output_file"; exit 1; fi
 	GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.29.0 -exclude=G101,G115,G202,G301,G304 ./...
 
@@ -59,7 +59,7 @@ deps:
 	bash scripts/check-sqlite-runtime.sh
 	GOWORK=off go mod tidy
 	git diff --exit-code -- go.mod go.sum
-	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 snapshot:
 	GOWORK=off goreleaser release --snapshot --clean --skip=publish
