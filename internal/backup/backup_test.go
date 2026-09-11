@@ -15,6 +15,7 @@ import (
 	"filippo.io/age"
 	ckbackup "github.com/openclaw/crawlkit/backup"
 	"github.com/openclaw/wacrawl/internal/store"
+	"github.com/openclaw/wacrawl/internal/testutil"
 )
 
 func TestEncryptedBackupPushPull(t *testing.T) {
@@ -52,7 +53,7 @@ func TestEncryptedBackupPushPull(t *testing.T) {
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	initBareRemote(t, remote)
-	repo := filepath.Join(t.TempDir(), "backup")
+	repo := filepath.Join(testutil.TempDir(t), "backup")
 	identity := filepath.Join(t.TempDir(), "age.key")
 	configPath := filepath.Join(t.TempDir(), "backup.json")
 	cfg, recipient, err := Init(ctx, Options{ConfigPath: configPath, Repo: repo, Remote: remote, Identity: identity, Push: false})
@@ -356,7 +357,7 @@ func TestHistoricalSnapshotRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repo := filepath.Join(t.TempDir(), "backup")
+	repo := filepath.Join(testutil.TempDir(t), "backup")
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	initBareRemote(t, remote)
 	identity := filepath.Join(t.TempDir(), "age.key")
@@ -1012,6 +1013,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	args = append([]string{"-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)
 	cmd := exec.CommandContext(ctx, "git", args...) // #nosec G204 -- tests pass only fixed Git commands and temporary paths.
 	cmd.Dir = dir
 	cmd.Env = append(

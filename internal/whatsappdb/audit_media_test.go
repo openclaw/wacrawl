@@ -19,6 +19,7 @@ import (
 	ckbackup "github.com/openclaw/crawlkit/backup"
 	"github.com/openclaw/wacrawl/internal/backup"
 	"github.com/openclaw/wacrawl/internal/store"
+	"github.com/openclaw/wacrawl/internal/testutil"
 )
 
 func TestAuditInvalidMediaPreservesMetadata(t *testing.T) {
@@ -246,7 +247,7 @@ func TestAuditMediaRejectsCaseEquivalentSourceRoot(t *testing.T) {
 
 func auditMediaFixture(t *testing.T) (*store.Store, string, string) {
 	t.Helper()
-	source := t.TempDir()
+	source := testutil.TempDir(t)
 	createFixtureDBs(t, source)
 	path := filepath.Join(source, "Message", "Media", "123@g.us", "a", "test.jpg")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -255,7 +256,7 @@ func auditMediaFixture(t *testing.T) (*store.Store, string, string) {
 	if err := os.WriteFile(path, []byte("image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "archive.db"))
+	st, err := store.Open(context.Background(), filepath.Join(testutil.TempDir(t), "archive.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

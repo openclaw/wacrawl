@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/openclaw/wacrawl/internal/store"
+	"github.com/openclaw/wacrawl/internal/testutil"
 	"github.com/openclaw/wacrawl/internal/whatsappdb"
 	_ "modernc.org/sqlite"
 )
@@ -741,7 +742,7 @@ func TestBackupCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := filepath.Join(t.TempDir(), "backup.json")
-	repo := filepath.Join(t.TempDir(), "backup")
+	repo := filepath.Join(testutil.TempDir(t), "backup")
 	identity := filepath.Join(t.TempDir(), "age.key")
 
 	var stdout, stderr bytes.Buffer
