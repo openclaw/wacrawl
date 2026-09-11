@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.12 - 2026-09-11
 
 **Highlights:** Preserve copied media and make encrypted backup publication safer across archive refreshes and push retries.
 
