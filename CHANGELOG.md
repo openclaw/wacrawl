@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct web command help to describe existing local image previews and confined media reads.
+
 ## 0.3.12 - 2026-09-11
 
 **Highlights:** Preserve copied media and make encrypted backup publication safer across archive refreshes and push retries.
