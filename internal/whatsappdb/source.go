@@ -96,12 +96,13 @@ func Discover(ctx context.Context, path string) (Source, error) {
 		_ = chatDB.QueryRowContext(ctx, "select count(*) from ZWACHATSESSION").Scan(&source.ChatRows)
 		_ = chatDB.QueryRowContext(ctx, "select count(*) from ZWAMEDIAITEM").Scan(&source.MediaRows)
 		var minDate, maxDate sql.NullFloat64
-		_ = chatDB.QueryRowContext(ctx, "select min(ZMESSAGEDATE), max(ZMESSAGEDATE) from ZWAMESSAGE").Scan(&minDate, &maxDate)
-		if minDate.Valid {
-			source.OldestMessage = appleTime(minDate.Float64).Format(time.RFC3339)
+		_ = chatDB.QueryRowContext(ctx, `select min(ZMESSAGEDATE), max(ZMESSAGEDATE)
+from ZWAMESSAGE where ZMESSAGEDATE > 0 and ZMESSAGEDATE < ?`, float64(maxJSONAppleSecondExclusive)).Scan(&minDate, &maxDate)
+		if oldest := appleNullTime(minDate); !oldest.IsZero() {
+			source.OldestMessage = oldest.Format(time.RFC3339)
 		}
-		if maxDate.Valid {
-			source.NewestMessage = appleTime(maxDate.Float64).Format(time.RFC3339)
+		if newest := appleNullTime(maxDate); !newest.IsZero() {
+			source.NewestMessage = newest.Format(time.RFC3339)
 		}
 		source.SchemaNotes = append(
 			source.SchemaNotes,

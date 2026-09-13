@@ -62,6 +62,8 @@ wacrawl doctor
 wacrawl --json doctor
 ```
 
+Date ranges exclude missing and invalid Desktop timestamps; row counts still include those messages.
+
 ### `status`
 
 Show live and deleted entity counts, revisions, unread counts, media-message count, date range, last import, and source metadata:
