@@ -141,7 +141,7 @@ func SnapshotPath(path string) (Snapshot, error) {
 		{axolotlDBName, axolotlDBName, true},
 	} {
 		_, err := cache.SnapshotSQLite(cache.SQLiteSnapshotOptions{SourcePath: filepath.Join(path, file.source), DestinationDir: root, Name: file.name})
-		if err != nil && !(file.optional && errors.Is(err, os.ErrNotExist)) {
+		if err != nil && (!file.optional || !errors.Is(err, os.ErrNotExist)) {
 			_ = os.RemoveAll(root)
 			return Snapshot{}, err
 		}
