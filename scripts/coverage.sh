@@ -3,7 +3,6 @@ set -eu
 
 threshold="${1:-85.0}"
 profile="${COVERAGE_PROFILE:-coverage.out}"
-raw_profile="${profile}.raw"
 
 awk -v threshold="$threshold" 'BEGIN {
 	if (threshold !~ /^[0-9]+([.][0-9]+)?$/) {
@@ -12,9 +11,11 @@ awk -v threshold="$threshold" 'BEGIN {
 	}
 }'
 
-go test ./... -coverprofile="$raw_profile" -covermode=atomic
+raw_profile="$(mktemp)"
+trap 'rm -f "$raw_profile"' 0
+
+go test -count=1 ./... -coverprofile="$raw_profile" -covermode=atomic
 grep -v '/internal/store/storedb/' "$raw_profile" > "$profile"
-rm -f "$raw_profile"
 total="$(go tool cover -func="$profile" | awk '/^total:/ { sub(/%/, "", $3); print $3 }')"
 if [ -z "$total" ]; then
 	echo "could not parse total coverage from $profile" >&2

@@ -80,13 +80,10 @@ jobs:
           cache: true
 
       - name: Test with coverage
-        run: go test -count=1 ./... -coverprofile=coverage.out
+        run: ./scripts/coverage.sh 85.0
 
       - name: Test with race detector
         run: go test -count=1 -race ./...
-
-      - name: Enforce coverage floor
-        run: ./scripts/coverage.sh 85.0
 
       - name: Build
         run: go build ./cmd/wacrawl
@@ -156,7 +153,7 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: v2.18.1
           args: release --snapshot --clean --skip=publish
 
       - name: Test macOS release scripts

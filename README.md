@@ -146,6 +146,8 @@ make test
 make check
 ```
 
+Use the GoReleaser version pinned in [CI](.github/workflows/ci.yml) for local snapshots.
+
 `make check` mirrors the local CI gates: formatting, analysis, tests, race and coverage checks, dependency and vulnerability checks, a credential-free GoReleaser snapshot, release-script tests, and secret scans.
 
 ## License
