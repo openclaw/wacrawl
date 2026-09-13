@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update CrawlKit to v0.16.2 and the test-only C compiler to v4.29.7, preserving SQLite's required libc runtime.
 - Handle SQLite quoted, Unicode, and dollar-containing identifiers in read-only SQL, accepting names with semicolons and rejecting write CTEs with keyword-like names.
 - Exclude invalid Desktop timestamps from doctor date ranges, preserving valid bounds and message counts.
 - Correct web command help to describe existing local image previews and confined media reads.
