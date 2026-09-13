@@ -97,45 +97,27 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	closed := false
-	cleanup := true
 	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 	}()
 
-	closeTmp := func() error {
-		if closed {
-			return nil
-		}
-		closed = true
-		return tmp.Close()
-	}
-
 	if _, err := tmp.Write(data); err != nil {
-		_ = closeTmp()
 		return err
 	}
 	if err := tmp.Chmod(perm); err != nil {
-		_ = closeTmp()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = closeTmp()
 		return err
 	}
-	if err := closeTmp(); err != nil {
+	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := renameConfigFile(tmpName, path); err != nil {
 		return err
 	}
-	if err := syncConfigDir(dir); err != nil {
-		return err
-	}
-	cleanup = false
-	return nil
+	return syncConfigDir(dir)
 }
 
 func syncConfigDir(dir string) error {

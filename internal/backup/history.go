@@ -2,9 +2,7 @@ package backup
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	ckbackup "github.com/openclaw/crawlkit/backup"
@@ -68,20 +66,4 @@ func validateSnapshotTag(ctx context.Context, repo, requested string) error {
 
 func tagSnapshot(ctx context.Context, cfg Config, requested string) (string, error) {
 	return mirror.CreateImmutableTag(ctx, mirrorOptions(cfg), requested)
-}
-
-func resolveCommit(ctx context.Context, repo, ref string) (string, error) {
-	return mirror.ResolveCommit(ctx, mirror.Options{RepoPath: repo, Branch: "main"}, ref)
-}
-
-func decodeManifest(data []byte) (Manifest, error) {
-	var manifest ckbackup.Manifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, err
-	}
-	return fromCrawlkitManifest(manifest), nil
-}
-
-func shortRef(ref string) string {
-	return mirror.ShortRef(strings.TrimSpace(ref))
 }
