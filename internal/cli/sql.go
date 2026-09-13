@@ -158,19 +158,11 @@ func readOnlySQLStartsWithSelect(query string) bool {
 
 func withClauseEndsInSelect(query string) bool {
 	for i, depth := len("with"), 0; i < len(query); i++ {
+		if end, ok := scanSQLDelimited(query, i); ok {
+			i = end
+			continue
+		}
 		switch query[i] {
-		case '\'':
-			i = scanSQLQuoted(query, i, '\'')
-		case '"':
-			i = scanSQLQuoted(query, i, '"')
-		case '-':
-			if i+1 < len(query) && query[i+1] == '-' {
-				i = scanSQLLineComment(query, i+2)
-			}
-		case '/':
-			if i+1 < len(query) && query[i+1] == '*' {
-				i = scanSQLBlockComment(query, i+2)
-			}
 		case '(':
 			depth++
 		case ')':
@@ -208,24 +200,37 @@ func startsWithSQLKeyword(query, keyword string) bool {
 
 func hasAdditionalSQLStatement(query string) bool {
 	for i := 0; i < len(query); i++ {
-		switch query[i] {
-		case '\'':
-			i = scanSQLQuoted(query, i, '\'')
-		case '"':
-			i = scanSQLQuoted(query, i, '"')
-		case '-':
-			if i+1 < len(query) && query[i+1] == '-' {
-				i = scanSQLLineComment(query, i+2)
-			}
-		case '/':
-			if i+1 < len(query) && query[i+1] == '*' {
-				i = scanSQLBlockComment(query, i+2)
-			}
-		case ';':
+		if end, ok := scanSQLDelimited(query, i); ok {
+			i = end
+			continue
+		}
+		if query[i] == ';' {
 			return strings.TrimSpace(stripSQLLeadingComments(query[i+1:])) != ""
 		}
 	}
 	return false
+}
+
+// Skip delimiters before interpreting statement separators or CTE keywords.
+func scanSQLDelimited(query string, start int) (int, bool) {
+	switch query[start] {
+	case '\'', '"', '`':
+		return scanSQLQuoted(query, start, query[start]), true
+	case '[':
+		if end := strings.IndexByte(query[start+1:], ']'); end >= 0 {
+			return start + 1 + end, true
+		}
+		return len(query) - 1, true
+	case '-':
+		if start+1 < len(query) && query[start+1] == '-' {
+			return scanSQLLineComment(query, start+2), true
+		}
+	case '/':
+		if start+1 < len(query) && query[start+1] == '*' {
+			return scanSQLBlockComment(query, start+2), true
+		}
+	}
+	return start, false
 }
 
 func scanSQLQuoted(query string, start int, quote byte) int {
@@ -283,11 +288,11 @@ func stripSQLLeadingComments(query string) string {
 }
 
 func isSQLIdentChar(c byte) bool {
-	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return isSQLIdentStart(c) || c >= '0' && c <= '9' || c == '$'
 }
 
 func isSQLIdentStart(c byte) bool {
-	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
 }
 
 func normalizeSQLValue(value any) any {

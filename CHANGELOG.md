@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Handle SQLite quoted, Unicode, and dollar-containing identifiers in read-only SQL, accepting names with semicolons and rejecting write CTEs with keyword-like names.
+
 - Correct web command help to describe existing local image previews and confined media reads.
 
 ## 0.3.12 - 2026-09-11

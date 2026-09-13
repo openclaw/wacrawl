@@ -124,7 +124,7 @@ wacrawl --json --sync never contacts export
 
 ### `sql`
 
-Run a single read-only `SELECT` statement against the archive:
+Run a single read-only `SELECT` statement against the archive. Common table expressions and SQLite identifiers, including Unicode names and quoted names (double quotes, backticks, or square brackets), are supported; punctuation inside a quoted identifier is not a statement separator:
 
 ```bash
 wacrawl sql "SELECT count(*) FROM messages"

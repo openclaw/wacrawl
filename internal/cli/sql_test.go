@@ -33,6 +33,10 @@ func TestValidateReadOnlySQLRejectsWritesAndAdditionalStatements(t *testing.T) {
 		"SELECTED 1",
 		"INSERT INTO messages(text) VALUES ('nope')",
 		"WITH rows AS (SELECT 1) DELETE FROM messages RETURNING 1",
+		"WITH [select] AS (SELECT 1) DELETE FROM messages RETURNING 1",
+		"WITH `select` AS (SELECT 1) DELETE FROM messages RETURNING 1",
+		"WITH éselect AS (SELECT 1) DELETE FROM messages RETURNING 1",
+		"WITH t$select AS (SELECT 1) DELETE FROM messages RETURNING 1",
 	} {
 		t.Run(query, func(t *testing.T) {
 			if err := validateReadOnlySQL(query); err == nil || !strings.Contains(err.Error(), readOnlySelectError) {
@@ -43,10 +47,44 @@ func TestValidateReadOnlySQLRejectsWritesAndAdditionalStatements(t *testing.T) {
 	for _, query := range []string{
 		"SELECT 1; SELECT 2",
 		"SELECT 1; /* comment */ SELECT 2",
+		"SELECT 1 AS [semi;colon]; SELECT 2",
+		"SELECT 1 AS `semi;colon`; SELECT 2",
 	} {
 		t.Run(query, func(t *testing.T) {
 			if err := validateReadOnlySQL(query); err == nil || !strings.Contains(err.Error(), "single read-only select") {
 				t.Fatalf("validateReadOnlySQL() error = %v, want single statement error", err)
+			}
+		})
+	}
+}
+
+func TestQueryReadOnlySQLQuotedIdentifiers(t *testing.T) {
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ query, column string }{
+		{"SELECT 1 AS [semi;colon]", "semi;colon"},
+		{"SELECT 1 AS `semi;colon`", "semi;colon"},
+		{"SELECT 1 AS `a``b;c`", "a`b;c"},
+		{"SELECT 1 AS [x';--comment]", "x';--comment"},
+		{"WITH [delete] AS (SELECT 1 AS n) SELECT n FROM [delete]", "n"},
+		{"WITH `update` AS (SELECT 1 AS n) SELECT n FROM `update`", "n"},
+		{"WITH édelete AS (SELECT 1 AS n) SELECT n FROM édelete", "n"},
+		{"WITH t$delete AS (SELECT 1 AS n) SELECT n FROM t$delete", "n"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			result, err := queryReadOnlySQL(ctx, dbPath, tc.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.rows) != 1 || result.rows[0][tc.column] != int64(1) {
+				t.Fatalf("rows = %#v", result.rows)
 			}
 		})
 	}
