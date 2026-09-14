@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.3.13 - 2026-09-13
 
 - Handle SQLite quoted, Unicode, and dollar-containing identifiers in read-only SQL, accepting names with semicolons and rejecting write CTEs with keyword-like names.
