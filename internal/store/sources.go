@@ -336,8 +336,14 @@ func recordSource(ctx context.Context, tx *sql.Tx, m Message, now time.Time) err
 	if err != nil {
 		return err
 	}
-	payload = fmt.Sprintf(`{"message":%s,"source_text_null":%t}`, payload, m.SourceTextNull)
-	return insertObservation(ctx, tx, SourceObservation{mapping, payload, now})
+	observation, err := json.Marshal(struct {
+		Message        json.RawMessage `json:"message"`
+		SourceTextNull bool            `json:"source_text_null"`
+	}{json.RawMessage(payload), m.SourceTextNull})
+	if err != nil {
+		return err
+	}
+	return insertObservation(ctx, tx, SourceObservation{mapping, string(observation), now})
 }
 
 func insertMapping(ctx context.Context, tx *sql.Tx, m SourceMapping) error {

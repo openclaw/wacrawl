@@ -64,6 +64,30 @@ func assertRepeat(t *testing.T, st *Store, source string, messages ...Message) {
 	}
 }
 
+func TestSourceObservationPreservesQuotedMessage(t *testing.T) {
+	st := reloginStore(t)
+	m := reloginMessage(1, "quoted")
+	m.Text = "quoted \"text\", 'apostrophe', \\path\n},\"source_text_null\":true"
+	mergeRelogin(t, st, "first", m)
+	data := snapshotRelogin(t, st)
+	if len(data.Observations) != 1 {
+		t.Fatalf("got %d source observations", len(data.Observations))
+	}
+	var observation struct {
+		Message struct {
+			Text string `json:"text"`
+		} `json:"message"`
+		SourceTextNull bool `json:"source_text_null"`
+	}
+	if err := json.Unmarshal([]byte(data.Observations[0].PayloadJSON), &observation); err != nil {
+		t.Fatal(err)
+	}
+	if observation.Message.Text != m.Text || observation.SourceTextNull {
+		t.Fatalf("message text changed the observation structure: %+v", observation)
+	}
+	assertRepeat(t, st, "first", m)
+}
+
 func TestRecurringReloginsKeepEventsAndProvenance(t *testing.T) {
 	st := reloginStore(t)
 	old := reloginMessage(1, "old-only")
