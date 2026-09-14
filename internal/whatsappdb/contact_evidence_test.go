@@ -26,6 +26,15 @@ func TestDesktopRestoreIgnoresDestinationContactEvidence(t *testing.T) {
 	if _, err := st.DB().Exec(`update contacts set lid='777@lid',lid_evidence='broken' where jid='111@s.whatsapp.net'`); err != nil {
 		t.Fatal(err)
 	}
+	// A CLI restore opens the destination before reaching import preflight.
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.Open(ctx, st.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st = reopened
 	db, err := sql.Open("sqlite", filepath.Join(source, contactsDBName))
 	if err != nil {
 		t.Fatal(err)

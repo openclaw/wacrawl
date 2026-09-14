@@ -107,7 +107,7 @@ Keep a recovery copy of each `~/.wacrawl/age.key` in a password manager. Never c
 
 ## Upgrading archive and backup readers
 
-The cumulative-relogin/contact-evidence build uses archive schema 5 and upgrades an existing schema-3 or schema-4 archive when it opens the database, including for a read command. Older schema-3 builds (including v0.3.11) cannot reopen the upgraded archive. New backups also contain source-provenance tables that schema-3 backup readers reject. Experimental schema-4 backup readers silently ignore the new contact-link evidence field and can discard conflict history on restore or re-export. They must also be upgraded before reading or writing schema-5 backups. SQLite version checks reject newer databases, but the existing backup format has no minimum-reader negotiation; do not rely on a backup error to protect mixed-version use. This is a reader-version requirement, not a decryption failure.
+The cumulative-relogin/contact-evidence build uses archive schema 5 and upgrades an existing schema-3 or schema-4 archive when it opens the database, including for a read command. Older schema-3 builds (through v0.3.13) cannot reopen the upgraded archive. New backups also contain source-provenance tables that schema-3 backup readers reject. Experimental schema-4 backup readers silently ignore the new contact-link evidence field and can discard conflict history on restore or re-export. They must also be upgraded before reading or writing schema-5 backups. SQLite version checks reject newer databases, but the existing backup format has no minimum-reader negotiation; do not rely on a backup error to protect mixed-version use. This is a reader-version requirement, not a decryption failure.
 
 Before upgrading:
 

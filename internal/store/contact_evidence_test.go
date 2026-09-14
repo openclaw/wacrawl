@@ -173,6 +173,52 @@ func TestNativeDuplicateContactEvidencePolicy(t *testing.T) {
 	}
 }
 
+func TestSparseDuplicateContactPreservesMetadataAndLink(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprint(existing), func(t *testing.T) {
+			var expected SnapshotData
+			for _, reverse := range []bool{false, true} {
+				st := reloginStore(t)
+				if existing {
+					mergeContactLogin(t, st, "first", []Contact{{JID: aliasPN, LID: aliasLID, FullName: "Old"}})
+				}
+				named := Contact{JID: aliasPN, LID: aliasLID, Phone: "100", FullName: "Current", FirstName: "First", LastName: "Last", BusinessName: "Business", Username: "user", AboutText: "about", UpdatedAt: time.Unix(1750000000, 0).UTC()}
+				contacts := []Contact{named, {JID: aliasPN}}
+				if reverse {
+					contacts[0], contacts[1] = contacts[1], contacts[0]
+				}
+				messages := []Message{aliasMessage(1, "pn", aliasPN), aliasMessage(2, "lid", aliasLID)}
+				mergeContactLogin(t, st, "second", contacts, messages...)
+				data := snapshotRelogin(t, st)
+				if len(data.Contacts) != 1 {
+					t.Fatal("duplicate contact was not consolidated")
+				}
+				got := data.Contacts[0]
+				got.Tombstone, got.LIDEvidence = Tombstone{}, nil
+				if !reflect.DeepEqual(got, named) {
+					t.Fatalf("sparse duplicate lost contact metadata: %+v", got)
+				}
+				rows, err := st.Messages(context.Background(), MessageFilter{ChatJID: aliasPN, Limit: 10})
+				if err != nil || len(rows) != 2 {
+					t.Fatalf("missing LID invalidated the explicit link: %d %v", len(rows), err)
+				}
+				mergeContactLogin(t, st, "second", contacts, messages...)
+				if !reflect.DeepEqual(data, snapshotRelogin(t, st)) {
+					t.Fatal("sparse duplicate replay changed the archive")
+				}
+				if reverse && !reflect.DeepEqual(expected, data) {
+					t.Fatal("sparse duplicate result depends on input order")
+				}
+				expected = data
+				mergeContactLogin(t, st, "second", []Contact{{JID: aliasPN}})
+				if snapshotRelogin(t, st).Contacts[0].FullName != "" {
+					t.Fatal("a later single-row update could not clear its name")
+				}
+			}
+		})
+	}
+}
+
 func TestContactEvidenceMigrationFromThreeAndFour(t *testing.T) {
 	for _, version := range []int{3, 4} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {

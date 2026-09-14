@@ -66,8 +66,11 @@ begin select raise(abort, 'messages.event_id is required'); end;`); err != nil {
 			return fmt.Errorf("backfill %s last_seen_at: %w", table, err)
 		}
 	}
-	if err := migrateContactEvidence(ctx, tx); err != nil {
-		return err
+	// Completed migrations must not block exact restore on destination evidence.
+	if current < 5 {
+		if err := migrateContactEvidence(ctx, tx); err != nil {
+			return err
+		}
 	}
 	if err := migrateSources(ctx, tx); err != nil {
 		return err

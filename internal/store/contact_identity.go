@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -113,6 +114,9 @@ func prepareContactIdentities(ctx context.Context, tx *sql.Tx, input []Contact, 
 	first := map[string]string{}
 	conflicting := map[string]bool{}
 	for _, c := range input {
+		if c.LID == "" {
+			continue
+		}
 		if lid, ok := first[c.JID]; ok && !sameContactLID(lid, c.LID) {
 			conflicting[c.JID] = true
 		} else if !ok {
@@ -120,9 +124,24 @@ func prepareContactIdentities(ctx context.Context, tx *sql.Tx, input []Contact, 
 		}
 	}
 	current := make([]Contact, 0, len(input))
+	seenInput := map[string]bool{}
 	for _, c := range input {
 		current = append(current, Contact{JID: c.JID, LID: c.LID, Tombstone: c.Tombstone})
 		old := projected[c.JID]
+		if seenInput[c.JID] {
+			// Fill sparse duplicate rows within this snapshot, not later updates.
+			c.Phone = cmp.Or(c.Phone, old.Phone)
+			c.FullName = cmp.Or(c.FullName, old.FullName)
+			c.FirstName = cmp.Or(c.FirstName, old.FirstName)
+			c.LastName = cmp.Or(c.LastName, old.LastName)
+			c.BusinessName = cmp.Or(c.BusinessName, old.BusinessName)
+			c.Username = cmp.Or(c.Username, old.Username)
+			c.AboutText = cmp.Or(c.AboutText, old.AboutText)
+			if c.UpdatedAt.IsZero() {
+				c.UpdatedAt = old.UpdatedAt
+			}
+		}
+		seenInput[c.JID] = true
 		evidence := append([]ContactLIDEvidence(nil), old.LIDEvidence...)
 		if old.LID != "" && !hasRawLID(evidence, old.LID) {
 			evidence = mergeLIDEvidence(evidence, ContactLIDEvidence{LID: old.LID})
