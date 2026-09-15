@@ -156,7 +156,6 @@ func (s *Store) MessageBySourcePK(ctx context.Context, sourcePK int64) (Message,
 
 func messageListQuery(filter MessageFilter) (string, []any) {
 	validQuery, validArgs := filteredMessagesQuery(filter, "")
-	validQuery += " and " + validUnixPredicate("ts")
 	if filter.After != nil || filter.Before != nil {
 		if filter.Asc {
 			validQuery += " order by ts asc, source_pk asc limit ?"
@@ -222,7 +221,12 @@ func (s *Store) Search(ctx context.Context, filter MessageFilter) ([]Message, er
 	query := `select m.source_pk, m.source_row_pk, m.event_id, m.chat_jid, coalesce(m.chat_name,''), m.msg_id, coalesce(m.sender_jid,''), coalesce(m.sender_name,''), m.ts, m.from_me, coalesce(m.text,''), m.raw_type, coalesce(m.message_type,''), coalesce(m.media_type,''), coalesce(m.media_title,''), coalesce(m.media_path,''), coalesce(m.media_url,''), coalesce(m.media_size,0), m.starred, coalesce(m.deleted_at,0), coalesce(m.deletion_source,''), coalesce(m.deletion_reason,''), m.last_seen_at, snippet(messages_fts, 0, ?, ?, '...', 12) from messages_fts f join messages m on m.rowid=f.rowid where messages_fts match ?`
 	args := []any{snippetStart, snippetEnd, ftsQuery}
 	query, args = applyMessageFilters(query, args, filter, true)
-	query += " order by bm25(messages_fts) limit ?"
+	if filter.Asc {
+		query += " order by case when " + validUnixPredicate("m.ts") + " then m.ts else 0 end asc, m.source_pk asc"
+	} else {
+		query += " order by bm25(messages_fts)"
+	}
+	query += " limit ?"
 	args = append(args, filter.Limit)
 	return scanMessages(ctx, s.db, query, args...)
 }
@@ -252,6 +256,9 @@ func applyMessageFilters(query string, args []any, filter MessageFilter, joined 
 			query += " and " + prefix + "sender_jid in (?,?)"
 			args = append(args, filter.Sender, filter.senderAlias)
 		}
+	}
+	if filter.After != nil || filter.Before != nil {
+		query += " and " + validUnixPredicate(prefix+"ts")
 	}
 	if filter.After != nil {
 		query += " and " + prefix + "ts >= ?"

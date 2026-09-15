@@ -106,11 +106,13 @@ wacrawl --json messages --has-media --limit 100
 | `--has-media` | Messages with media metadata only |
 | `--asc` | Oldest first |
 
+Date bounds are inclusive; date-only values mean midnight UTC. Messages with unknown or invalid timestamps remain available without date filters, but are excluded when either `--after` or `--before` is supplied. This applies to both `messages` and `search`.
+
 ### `search`
 
 Chat and sender filters honor unambiguous JID/LID links from the archived WhatsApp contacts, so either verified identifier finds the combined history after relogin. The importer accepts bare numeric values in the native contact LID field as well as full `@lid` values. Query arguments still require full JIDs; an unqualified number does not identify its namespace. Conflicting or missing links retain exact-identifier filtering. Schema 5 retains distinct raw LID observations on each contact. A changed or shared LID isolates the conflicting identifiers from alias matching, filtering, and parent deletion propagation while unrelated history continues importing. Empty updates, old-value replay, and contact deletion do not erase earlier contradictions. An empty incoming LID retains the last known scalar value but does not authorize new cross-store matches. When one native input contains contradictory rows for the same contact JID, all raw LID observations are retained; existing display fields stay unchanged, or a new contact contains only its JID and evidence until an unambiguous display row arrives. Exact canonical snapshots require unique contact JIDs.
 
-Search the portable SQLite FTS5 index across message text, chat name, sender name, and media title. Search accepts the same filters as `messages`, before or after the query.
+Search the portable SQLite FTS5 index across message text, chat name, sender name, and media title. Search accepts the same filters as `messages`, before or after the query. Results default to relevance order; `--asc` returns the oldest matches first, with unknown dates first when no date filter is supplied.
 
 ```bash
 wacrawl search "launch"
