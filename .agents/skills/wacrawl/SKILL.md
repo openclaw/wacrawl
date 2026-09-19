@@ -11,7 +11,6 @@ Use this for WhatsApp Desktop archive questions. `wacrawl` is read-only against 
 
 - DB: `~/.wacrawl/wacrawl.db`
 - Source: `~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared`
-- Repo: `~/Projects/wacrawl`
 - CLI: `wacrawl`
 
 ## Refresh
@@ -65,8 +64,8 @@ Do not write into the WhatsApp app container. Do not send messages; this tool is
 For repo edits:
 
 ```bash
-go test ./...
 make test
+make check
 ```
 
 Then smoke:
