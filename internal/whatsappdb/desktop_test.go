@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -628,6 +629,14 @@ func TestImportDesktopWithoutAccountIdentityCannotMergeNonemptyArchive(t *testin
 	if err := os.Remove(filepath.Join(source, axolotlDBName)); err != nil {
 		t.Fatal(err)
 	}
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `drop table Z_METADATA`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
 	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -639,9 +648,169 @@ func TestImportDesktopWithoutAccountIdentityCannotMergeNonemptyArchive(t *testin
 	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
 		t.Fatalf("unbound merge error = %v", err)
 	}
-	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err == nil || !strings.Contains(err.Error(), "source exposes no account identity") {
 		t.Fatalf("adoption without account identity error = %v", err)
 	}
+}
+
+func TestImportDesktopWithoutAccountIdentityReusesStoreBinding(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	if err := os.Remove(filepath.Join(source, axolotlDBName)); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	stats, err := Import(ctx, archive, source)
+	if err != nil {
+		t.Fatalf("initial unbound import: %v", err)
+	}
+	if stats.AccountIdentity != "" || stats.SourceStoreIdentity == "" {
+		t.Fatalf("initial identities = account %q, store %q", stats.AccountIdentity, stats.SourceStoreIdentity)
+	}
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err != nil {
+		t.Fatalf("adopt matching store: %v", err)
+	}
+	if _, err := Import(ctx, archive, source); err != nil {
+		t.Fatalf("repeat matching store import: %v", err)
+	}
+	results, err := archive.Search(ctx, store.MessageFilter{Query: "launch", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].MessageID != "group-image" {
+		t.Fatalf("archive search results = %+v", results)
+	}
+}
+
+func TestImportDesktopMatchingStoreStillRequiresAdoptionForFirstAccountBinding(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	axolotlPath := filepath.Join(source, axolotlDBName)
+	hidden := filepath.Join(t.TempDir(), axolotlDBName)
+	if err := os.Rename(axolotlPath, hidden); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	stats, err := Import(ctx, archive, source)
+	if err != nil || stats.AccountIdentity != "" || stats.SourceStoreIdentity == "" {
+		t.Fatalf("initial unbound import = %+v, %v", stats, err)
+	}
+	if err := os.Rename(hidden, axolotlPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("first account binding without adoption = %v", err)
+	}
+	var bound string
+	if err := archive.DB().QueryRowContext(ctx, `select coalesce((select value from sync_state where key='merge_account_identity'),'')`).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound != "" {
+		t.Fatalf("account binding persisted without adoption = %q", bound)
+	}
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err != nil {
+		t.Fatalf("explicit adoption: %v", err)
+	}
+	if err := archive.DB().QueryRowContext(ctx, `select coalesce((select value from sync_state where key='merge_account_identity'),'')`).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound == "" {
+		t.Fatal("explicit adoption did not persist an account binding")
+	}
+}
+
+func TestImportDesktopStoreOnlyAuthorityDoesNotSurviveAccountReassignment(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	axolotlPath := filepath.Join(source, axolotlDBName)
+	hidden := filepath.Join(t.TempDir(), axolotlDBName)
+	if err := os.Rename(axolotlPath, hidden); err != nil {
+		t.Fatal(err)
+	}
+	archiveDir := t.TempDir()
+	mediaRoot := filepath.Join(archiveDir, "media")
+	archive, err := store.Open(ctx, filepath.Join(archiveDir, "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, CopyMedia: true, MediaRoot: mediaRoot}); err != nil {
+		t.Fatalf("initial unbound import: %v", err)
+	}
+	baselineMessages := archiveMessageCount(ctx, t, archive)
+	baselineMedia := mediaFileCount(t, mediaRoot)
+
+	chatDB, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, chatDB, `update Z_METADATA set Z_UUID='reassigned-store';
+insert into ZWACHATSESSION values (3, '999@s.whatsapp.net', 'Stranger', 700000040, 0, 0, 0, 0, 0);
+insert into ZWAMESSAGE values (90, 3, null, null, 'foreign-msg', 0, 700000041, 'foreign history', 0, 0, '999@s.whatsapp.net', '', 'Stranger')`)
+	if err := chatDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, adopt := range []bool{false, true} {
+		_, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, CopyMedia: true, MediaRoot: mediaRoot, AdoptSource: adopt})
+		if err == nil {
+			t.Fatalf("reassigned store accepted (adopt=%v)", adopt)
+		}
+	}
+	if got := archiveMessageCount(ctx, t, archive); got != baselineMessages {
+		t.Fatalf("archive messages changed after refusal = %d, want %d", got, baselineMessages)
+	}
+	if got := mediaFileCount(t, mediaRoot); got != baselineMedia {
+		t.Fatalf("media files changed after refusal = %d, want %d", got, baselineMedia)
+	}
+	var foreign int
+	if err := archive.DB().QueryRowContext(ctx, `select count(*) from messages where msg_id='foreign-msg'`).Scan(&foreign); err != nil {
+		t.Fatal(err)
+	}
+	if foreign != 0 {
+		t.Fatalf("foreign history entered the archive = %d rows", foreign)
+	}
+}
+
+func archiveMessageCount(ctx context.Context, t *testing.T, archive *store.Store) int {
+	t.Helper()
+	var count int
+	if err := archive.DB().QueryRowContext(ctx, `select count(*) from messages`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func mediaFileCount(t *testing.T, root string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if !entry.IsDir() {
+			count++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func TestImportDesktopMigratesLegacyAccountBinding(t *testing.T) {

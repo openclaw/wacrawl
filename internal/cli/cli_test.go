@@ -196,6 +196,38 @@ func TestRunImportAdoptsLegacyArchiveExplicitly(t *testing.T) {
 	}
 }
 
+func TestRunImportWithoutAccountIdentityReusesStoreBinding(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createDesktopFixture(t, source)
+	if err := os.Remove(filepath.Join(source, "Axolotl.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	var stdout, stderr bytes.Buffer
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import"}, &stdout, &stderr); err != nil {
+		t.Fatalf("initial import: %v stderr=%s", err, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import", "--adopt-source"}, &stdout, &stderr); err != nil {
+		t.Fatalf("adopt matching store: %v stderr=%s", err, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import"}, &stdout, &stderr); err != nil {
+		t.Fatalf("repeat matching store import: %v stderr=%s", err, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if err := Run(ctx, []string{"--db", dbPath, "--sync", "never", "search", "launch"}, &stdout, &stderr); err != nil {
+		t.Fatalf("search imported archive: %v stderr=%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[launch] now") {
+		t.Fatalf("search output: %s", stdout.String())
+	}
+}
+
 func TestRunRelativeAndAbsolutePathContracts(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

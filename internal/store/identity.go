@@ -53,9 +53,10 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 	if strings.HasPrefix(existingAccount, "wa-store:") {
 		existingAccount = ""
 	}
+	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
 	if existingAccount != "" && existingAccount != accountIdentity {
 		legacyMatch := false
-		if accountIdentity != "" && existingStore != "" && existingStore == strings.TrimSpace(stats.SourceStoreIdentity) {
+		if accountIdentity != "" && existingStore != "" && existingStore == incomingStore {
 			for _, candidate := range stats.LegacyAccountIDs {
 				if strings.TrimSpace(candidate) == existingAccount {
 					legacyMatch = true
@@ -88,10 +89,13 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 	if err != nil {
 		return "", err
 	}
-	if existingAccount == "" && entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
+	storeContinuity := existingStore != "" && incomingStore != "" && existingStore == incomingStore && accountIdentity == ""
+	if existingAccount == "" && entityRows > 0 && !storeContinuity && (!stats.AdoptSource || accountIdentity == "") {
+		if stats.AdoptSource && accountIdentity == "" {
+			return "", errors.New("this WhatsApp source exposes no account identity, so --adopt-source cannot bind the archive; use a separate --db or import --restore")
+		}
 		return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
 	}
-	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
 	sameAccount := existingAccount != "" && existingAccount == accountIdentity
 	if existingStore != "" && incomingStore != existingStore && (!sameAccount || incomingStore == "") {
 		return "", errors.New("archive is bound to a different WhatsApp Desktop store; use a separate --db or import --restore")

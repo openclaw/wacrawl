@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Continue importing from the verified WhatsApp Desktop store when account metadata is unavailable, and avoid repeating an unusable `--adopt-source` recovery hint.
 - Apply date filters consistently to search results with invalid timestamps, and honor `search --asc` before limiting matches.
 - Preserve cumulative WhatsApp history across verified same-account Desktop relogins, retaining event identities, source provenance, and encrypted backup evidence (#88, thanks @alexph-dev).
 
