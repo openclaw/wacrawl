@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update CrawlKit to v0.16.4 and SQLite to v1.59.0 with its required libc v1.75.7 runtime, retaining the Go 1.27 and macOS 13 minimums.
 - Explain safe archive-only recovery when Desktop exposes no account identity, without suggesting ineffective adoption or destructive replacement (#105, thanks @yashiels).
 - Apply date filters consistently to search results with invalid timestamps, and honor `search --asc` before limiting matches.
 - Preserve cumulative WhatsApp history across verified same-account Desktop relogins, retaining event identities, source provenance, and encrypted backup evidence (#88, thanks @alexph-dev).
