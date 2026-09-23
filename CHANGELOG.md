@@ -1,11 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-09-22
+
+**Highlights:** Preserve cumulative history across verified Desktop relogins, with explicit schema-5 upgrade guidance and safer accountless recovery instructions.
+
+### Compatibility
+
+- Upgrade archives to schema 5 for source provenance and contact-link evidence. Keep a pre-upgrade database/media pair and encrypted snapshot, and upgrade every backup reader and writer to v0.4.0 or newer before publishing new snapshots; v0.3.13 and earlier cannot reopen upgraded archives.
+
+### Fixed
+
+- Preserve cumulative WhatsApp history across verified same-account Desktop relogins, retaining event identities, source provenance, and encrypted backup evidence (#88, thanks @alexph-dev).
+- Apply date filters consistently to search results with invalid timestamps, and honor `search --asc` before limiting matches.
+- Explain safe archive-only recovery when Desktop exposes no account identity, without suggesting ineffective adoption or destructive replacement (#105, thanks @yashiels).
+
+### Dependencies
 
 - Update CrawlKit to v0.16.4 and SQLite to v1.59.0 with its required libc v1.75.7 runtime, retaining the Go 1.27 and macOS 13 minimums.
-- Explain safe archive-only recovery when Desktop exposes no account identity, without suggesting ineffective adoption or destructive replacement (#105, thanks @yashiels).
-- Apply date filters consistently to search results with invalid timestamps, and honor `search --asc` before limiting matches.
-- Preserve cumulative WhatsApp history across verified same-account Desktop relogins, retaining event identities, source provenance, and encrypted backup evidence (#88, thanks @alexph-dev).
 
 ## 0.3.13 - 2026-09-13
 

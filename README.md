@@ -14,6 +14,8 @@
 
 ## Install
 
+Upgrading from v0.3.13 or earlier? v0.4.0 migrates archives to schema 5. Preserve a pre-upgrade archive/media copy and encrypted snapshot, then upgrade every backup reader and writer. Read the [upgrade and rollback guide](docs/backups.md#upgrading-archive-and-backup-readers) before opening an existing archive.
+
 On macOS, v0.3.10 and newer require macOS 13 or newer. v0.3.9 remains the last release supporting macOS 12.
 
 Homebrew is the smallest path:
