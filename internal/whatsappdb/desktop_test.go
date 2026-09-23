@@ -644,6 +644,48 @@ func TestImportDesktopWithoutAccountIdentityCannotMergeNonemptyArchive(t *testin
 	}
 }
 
+func TestImportDesktopMatchingStoreStillRequiresAdoptionForFirstAccountBinding(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	axolotlPath := filepath.Join(source, axolotlDBName)
+	hidden := filepath.Join(t.TempDir(), axolotlDBName)
+	if err := os.Rename(axolotlPath, hidden); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	stats, err := Import(ctx, archive, source)
+	if err != nil || stats.AccountIdentity != "" || stats.SourceStoreIdentity == "" {
+		t.Fatalf("initial unbound import = %+v, %v", stats, err)
+	}
+	if err := os.Rename(hidden, axolotlPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(ctx, archive, source); err == nil || !strings.Contains(err.Error(), "--adopt-source") {
+		t.Fatalf("first account binding without adoption = %v", err)
+	}
+	var bound string
+	if err := archive.DB().QueryRowContext(ctx, `select coalesce((select value from sync_state where key='merge_account_identity'),'')`).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound != "" {
+		t.Fatalf("account binding persisted without adoption = %q", bound)
+	}
+	if _, err := ImportWithOptions(ctx, archive, ImportOptions{SourcePath: source, AdoptSource: true}); err != nil {
+		t.Fatalf("explicit adoption: %v", err)
+	}
+	if err := archive.DB().QueryRowContext(ctx, `select coalesce((select value from sync_state where key='merge_account_identity'),'')`).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound == "" {
+		t.Fatal("explicit adoption did not persist an account binding")
+	}
+}
+
 func TestImportDesktopMigratesLegacyAccountBinding(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()

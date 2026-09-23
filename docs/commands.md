@@ -47,6 +47,15 @@ Routine imports merge by stable archive event identity, with Desktop row identit
 
 The archive binds the canonical Desktop source and a separately hashed account-owned JID from `Axolotl.sqlite`. Logging out and back in can replace the CoreData store and reuse its row numbers. Routine imports accept a replacement store for the same verified account, preserving archive event identities and recording each store’s message origins. They retain unmatched historical messages and conservatively match overlapping events; ambiguous events remain distinct. Repeated logins use the same `--db`, so existing search commands cover the cumulative history. A different or unknown account still refuses the merge. A nonempty legacy archive without a verified account binding requires explicit `--adopt-source`. `--restore` intentionally replaces history; it is not a relogin recovery command. `--adopt-source` and `--restore` are mutually exclusive. Encrypted backup and restore retain source origins and account binding. All backup readers and writers must support schema 5 to preserve contact-link evidence; see [backup compatibility](backups.md).
 
+If an existing archive has no verified account binding and the current Desktop source exposes no account identity, neither ordinary import nor `--adopt-source` can safely resume merges. A matching store fingerprint alone does not verify the account. Read retained history without syncing:
+
+```bash
+wacrawl --sync never status
+wacrawl --sync never search "invoice"
+```
+
+When the source exposes a verified account identity again, explicitly run `wacrawl import --adopt-source`. To capture an accountless source separately, select a new `--db`; keep the existing archive for its older history. Do not use `--restore` to recover this condition: it replaces retained history with the current Desktop snapshot.
+
 Explicit WhatsApp signals create source-attributed tombstones instead of deleting rows. Removed chats tombstone their archived groups, participants, and messages; inactive group members are tombstoned; and a message payload observed changing to SQL `NULL` is retained as a deleted message with its previous payload in `message_revisions`. Message tombstones remain sticky during later merges. An exact `--restore` is authoritative and can revive a source row; it also removes destination-only rows and local revision history. A removed chat can start a new live lifecycle when WhatsApp reports post-tombstone activity without reviving its historical messages. Normal list, search, status, and web reads exclude tombstones, while encrypted backups retain them.
 
 By default, media paths continue to point into WhatsApp Desktop's app container. `--copy-media` copies referenced files into `media/` beside the archive and rewrites the imported paths. Missing media is counted but does not fail the import.
