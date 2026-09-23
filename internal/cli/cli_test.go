@@ -196,7 +196,7 @@ func TestRunImportAdoptsLegacyArchiveExplicitly(t *testing.T) {
 	}
 }
 
-func TestRunImportWithoutAccountIdentityReusesStoreBinding(t *testing.T) {
+func TestRunImportWithoutAccountIdentityExplainsArchiveRecovery(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()
 	createDesktopFixture(t, source)
@@ -205,26 +205,25 @@ func TestRunImportWithoutAccountIdentityReusesStoreBinding(t *testing.T) {
 	}
 	dbPath := filepath.Join(t.TempDir(), "archive.db")
 	var stdout, stderr bytes.Buffer
-	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import"}, &stdout, &stderr); err != nil {
-		t.Fatalf("initial import: %v stderr=%s", err, stderr.String())
+	base := []string{"--db", dbPath, "--source", source}
+	if err := Run(ctx, append(base, "import"), &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range [][]string{{"import"}, {"import", "--adopt-source"}, {"--sync", "always", "status"}} {
+		err := Run(ctx, append(base, command...), &stdout, &stderr)
+		if err == nil || !strings.Contains(err.Error(), "source exposes no account identity") || !strings.Contains(err.Error(), "--sync never") {
+			t.Fatalf("%v recovery error = %v", command, err)
+		}
+		if strings.Contains(err.Error(), "rerun an explicit import with --adopt-source") || strings.Contains(err.Error(), "import --restore") {
+			t.Fatalf("unsafe or ineffective recovery advice: %v", err)
+		}
 	}
 	stdout.Reset()
-	stderr.Reset()
-	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import", "--adopt-source"}, &stdout, &stderr); err != nil {
-		t.Fatalf("adopt matching store: %v stderr=%s", err, stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if err := Run(ctx, []string{"--db", dbPath, "--source", source, "import"}, &stdout, &stderr); err != nil {
-		t.Fatalf("repeat matching store import: %v stderr=%s", err, stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if err := Run(ctx, []string{"--db", dbPath, "--sync", "never", "search", "launch"}, &stdout, &stderr); err != nil {
-		t.Fatalf("search imported archive: %v stderr=%s", err, stderr.String())
+	if err := Run(ctx, append(base, "--sync", "never", "search", "launch"), &stdout, &stderr); err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "[launch] now") {
-		t.Fatalf("search output: %s", stdout.String())
+		t.Fatalf("retained search output: %s", stdout.String())
 	}
 }
 
