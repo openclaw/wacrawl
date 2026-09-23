@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.4.0 - 2026-09-22
 
 **Highlights:** Preserve cumulative history across verified Desktop relogins, with explicit schema-5 upgrade guidance and safer accountless recovery instructions.
