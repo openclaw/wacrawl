@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-09-24
+
+**Highlights:** Make explicit source adoption reject missing account identity before importing messages or media, with clear archive-only recovery guidance.
+
 - Reject `import --adopt-source` without a verified source account identity even for an empty archive, and clarify the account requirement and nondestructive recovery in CLI help (#105, thanks @yashiels).
 
 ## 0.4.0 - 2026-09-22
