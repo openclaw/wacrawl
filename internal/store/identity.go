@@ -88,10 +88,10 @@ func validateImportSource(ctx context.Context, tx *sql.Tx, restore bool, stats I
 	if err != nil {
 		return "", err
 	}
-	if existingAccount == "" && entityRows > 0 && (!stats.AdoptSource || accountIdentity == "") {
-		if accountIdentity == "" {
-			return "", errors.New("this WhatsApp source exposes no account identity, so --adopt-source cannot bind the archive; read retained history with --sync never, or import into a separate --db")
-		}
+	if accountIdentity == "" && (stats.AdoptSource || existingAccount == "" && entityRows > 0) {
+		return "", errors.New("this WhatsApp source exposes no account identity, so --adopt-source cannot bind the archive; read retained history with --sync never, or import into a separate --db without --adopt-source")
+	}
+	if existingAccount == "" && entityRows > 0 && !stats.AdoptSource {
 		return "", errors.New("archive has no verified WhatsApp account binding; rerun an explicit import with --adopt-source, use a separate --db, or import --restore")
 	}
 	incomingStore := strings.TrimSpace(stats.SourceStoreIdentity)
