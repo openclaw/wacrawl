@@ -196,6 +196,38 @@ func TestRunImportAdoptsLegacyArchiveExplicitly(t *testing.T) {
 	}
 }
 
+func TestRunAdoptSourceWithoutAccountIdentityRejectsEmptyArchive(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createDesktopFixture(t, source)
+	if err := os.Remove(filepath.Join(source, "Axolotl.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	var stdout, stderr bytes.Buffer
+	err := Run(ctx, []string{"--db", dbPath, "--source", source, "import", "--adopt-source", "--copy-media"}, &stdout, &stderr)
+	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "source exposes no account identity") || !strings.Contains(err.Error(), "--sync never") {
+		t.Fatalf("adoption without account identity = %v, stdout=%s", err, stdout.String())
+	}
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	var rows int
+	if err := st.DB().QueryRowContext(ctx, `select
+(select count(*) from contacts)+(select count(*) from chats)+(select count(*) from messages)+
+(select count(*) from sync_state)`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("rejected adoption persisted %d archive rows", rows)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dbPath), "media")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected adoption created media directory: %v", err)
+	}
+}
+
 func TestRunImportWithoutAccountIdentityExplainsArchiveRecovery(t *testing.T) {
 	ctx := context.Background()
 	source := t.TempDir()

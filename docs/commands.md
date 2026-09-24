@@ -54,7 +54,7 @@ wacrawl --sync never status
 wacrawl --sync never search "invoice"
 ```
 
-When the source exposes a verified account identity again, explicitly run `wacrawl import --adopt-source`. To capture an accountless source separately, select a new `--db`; keep the existing archive for its older history. Do not use `--restore` to recover this condition: it replaces retained history with the current Desktop snapshot.
+When the source exposes a verified account identity again, explicitly run `wacrawl import --adopt-source`. Adoption rejects a source without account identity even if the archive is empty; it never reports a successful adoption without binding an account. To capture an accountless source separately, select a new `--db` and import without `--adopt-source`; keep the existing archive for its older history. Do not use `--restore` to recover this condition: it replaces retained history with the current Desktop snapshot.
 
 Explicit WhatsApp signals create source-attributed tombstones instead of deleting rows. Removed chats tombstone their archived groups, participants, and messages; inactive group members are tombstoned; and a message payload observed changing to SQL `NULL` is retained as a deleted message with its previous payload in `message_revisions`. Message tombstones remain sticky during later merges. An exact `--restore` is authoritative and can revive a source row; it also removes destination-only rows and local revision history. A removed chat can start a new live lifecycle when WhatsApp reports post-tombstone activity without reviving its historical messages. Normal list, search, status, and web reads exclude tombstones, while encrypted backups retain them.
 

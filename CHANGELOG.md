@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject `import --adopt-source` without a verified source account identity even for an empty archive, and clarify the account requirement and nondestructive recovery in CLI help (#105, thanks @yashiels).
+
 ## 0.4.0 - 2026-09-22
 
 **Highlights:** Preserve cumulative history across verified Desktop relogins, with explicit schema-5 upgrade guidance and safer accountless recovery instructions.

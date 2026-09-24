@@ -38,7 +38,7 @@ Options:
 
 Import flags:
   --copy-media              Copy referenced media files into the archive media directory.
-  --adopt-source            Bind an existing unverified archive to this account and merge.
+  --adopt-source            Bind and merge; requires a verified source account identity.
   --restore                 Exactly replace archive rows instead of merging.
 
 Examples:
@@ -87,8 +87,13 @@ Usage:
 Flags:
   --source PATH   WhatsApp Desktop source path.
   --copy-media    Copy referenced media files into media/ next to the archive DB.
-  --adopt-source  Bind an existing unverified archive to this account and merge.
+  --adopt-source  Bind and merge; requires a verified source account identity.
   --restore       Exactly replace archive rows instead of merging.
+
+Adoption requires account metadata from the Desktop source, even for an empty
+archive. A store fingerprint alone is insufficient. If account metadata is
+missing, read retained history with --sync never. --restore replaces history
+and is not a recovery for missing account identity.
 
 Examples:
   wacrawl %s
