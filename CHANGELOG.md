@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update CrawlKit to v0.16.6 to stay current with the shared crawler toolkit.
+
 ## 0.4.1 - 2026-09-24
 
 **Highlights:** Make explicit source adoption reject missing account identity before importing messages or media, with clear archive-only recovery guidance.
