@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+## 0.4.2 - 2026-10-01
+
+**Highlights:** Make legacy archive adoption scale without repeated full-history scans, retaining existing messages and event identities.
+
 - Avoid repeated full-archive scans during legacy source adoption, preserving duplicate event selection and retained history (#114, #115, thanks @goutamadwant and @bubucilo).
+- Update SQLite to v1.60.1 with its required libc v1.77.1 runtime, refresh the date-formatting helper and linter, and retain the Go 1.27 and macOS 13 minimums.
+- Update CrawlKit to v0.16.7 for safer sidecar copying after case-only directory renames.
 - Update CrawlKit to v0.16.6 to stay current with the shared crawler toolkit.
 
 ## 0.4.1 - 2026-09-24
