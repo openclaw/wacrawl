@@ -15,6 +15,18 @@ gh workflow run release-unified.yml \
 
 Tags, Developer ID and App Store Connect credentials, draft publication, artifact verification, and Homebrew handoff belong to the workflow. `make release VERSION=vX.Y.Z` deliberately refuses local publication and prints the official command.
 
+To validate the current source and signed build pipeline without creating a tag, publishing a release, or updating Homebrew, use the current released version with `dry_run`:
+
+```bash
+gh workflow run release-unified.yml \
+  --repo openclaw/wacrawl \
+  --ref main \
+  -f version=0.4.2 \
+  -f dry_run=true
+```
+
+Dry runs reuse the existing version's changelog section. Real releases still require a new, dated version section.
+
 ## Local verification
 
 Local builds and snapshots require no signing credentials:
