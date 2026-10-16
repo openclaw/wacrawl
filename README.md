@@ -142,6 +142,8 @@ The preferred build toolchain is Go 1.27.2, selected automatically by `go.mod` a
 
 Keep `modernc.org/libc` at the exact version required by `modernc.org/sqlite`; SQLite's generated code depends on that runtime pairing. Update them together, and check test-only compiler updates for indirect libc upgrades. `make deps` and CI verify the resolved versions.
 
+The `tools` module pins gosec separately from the application so its Go importer can stay compatible with the build toolchain. `make lint` and CI run the same scanner wrapper; `make deps` also verifies this tools module.
+
 ```bash
 make build
 make test

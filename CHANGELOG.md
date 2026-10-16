@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Update CrawlKit to v0.17.0 and refresh cryptography and OS dependencies, retaining SQLite's required libc runtime and the Go 1.27.0 minimum.
-- Build with Go 1.27.2 for standard-library security fixes, and allow release-pipeline dry runs without creating tags or publishing artifacts.
+- Build with Go 1.27.2 for standard-library security fixes, update the analysis tools for its export format, and allow release-pipeline dry runs without creating tags or publishing artifacts.
 
 ## 0.4.2 - 2026-10-01
 
