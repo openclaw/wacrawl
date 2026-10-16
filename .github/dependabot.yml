@@ -6,6 +6,12 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
 
+  - package-ecosystem: gomod
+    directory: /tools
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
