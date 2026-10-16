@@ -43,22 +43,24 @@ fmt:
 lint:
 	golangci-lint run ./...
 	GOWORK=off go vet ./...
-	GOWORK=off go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+	GOWORK=off go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 	@set -e; \
 	output_file="$$(mktemp)"; \
 	trap 'rm -f "$$output_file"' 0; \
-	GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... > "$$output_file"; \
+	GOWORK=off go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... > "$$output_file"; \
 	if [ -s "$$output_file" ]; then cat "$$output_file"; exit 1; fi
-	GOWORK=off go run github.com/securego/gosec/v2/cmd/gosec@v2.29.0 -exclude=G101,G115,G202,G301,G304 ./...
+	bash scripts/gosec.sh -exclude=G101,G115,G202,G301,G304 ./...
 
 coverage:
 	GOWORK=off ./scripts/coverage.sh $(COVERAGE_THRESHOLD)
 
 deps:
 	GOWORK=off go mod verify
+	GOWORK=off go -C tools mod verify
 	bash scripts/check-sqlite-runtime.sh
 	GOWORK=off go mod tidy
-	git diff --exit-code -- go.mod go.sum
+	GOWORK=off go -C tools mod tidy
+	git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
 	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 snapshot:

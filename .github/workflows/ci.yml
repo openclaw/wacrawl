@@ -34,10 +34,9 @@ jobs:
 
       - name: Install analyzers
         run: |
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
           go install mvdan.cc/gofumpt@v0.12.0
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
-          go install golang.org/x/tools/cmd/deadcode@v0.50.0
+          go install golang.org/x/tools/cmd/deadcode@v0.52.0
 
       - name: Vet
         run: go vet ./...
@@ -63,8 +62,7 @@ jobs:
           fi
 
       - name: Gosec
-        run: |
-          "$(go env GOPATH)/bin/gosec" -exclude=G101,G115,G202,G301,G304 ./...
+        run: bash scripts/gosec.sh -exclude=G101,G115,G202,G301,G304 ./...
 
   test:
     runs-on: ubuntu-latest
@@ -118,7 +116,9 @@ jobs:
           cache: true
 
       - name: Verify module cache
-        run: go mod verify
+        run: |
+          go mod verify
+          go -C tools mod verify
 
       - name: Check SQLite runtime compatibility
         run: bash scripts/check-sqlite-runtime.sh
@@ -126,7 +126,8 @@ jobs:
       - name: Check go.mod tidy
         run: |
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          go -C tools mod tidy
+          git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
 
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0

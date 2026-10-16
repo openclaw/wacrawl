@@ -138,9 +138,11 @@ Run `wacrawl help <command>` or open the [full command reference](docs/commands.
 
 Requires Go 1.27.0 or newer.
 
-The preferred build toolchain is Go 1.27.1, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
+The preferred build toolchain is Go 1.27.2, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
 
 Keep `modernc.org/libc` at the exact version required by `modernc.org/sqlite`; SQLite's generated code depends on that runtime pairing. Update them together, and check test-only compiler updates for indirect libc upgrades. `make deps` and CI verify the resolved versions.
+
+The `tools` module pins gosec separately from the application so its Go importer can stay compatible with the build toolchain. `make lint` and CI run the same scanner wrapper; `make deps` also verifies this tools module.
 
 ```bash
 make build
