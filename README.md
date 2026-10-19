@@ -136,6 +136,9 @@ Run `wacrawl help <command>` or open the [full command reference](docs/commands.
 
 ## Development
 
+macOS CI runs on the Apple Silicon macOS 27 `xcode-27` image while retaining
+the macOS 13 deployment target.
+
 Requires Go 1.27.0 or newer.
 
 The preferred build toolchain is Go 1.27.2, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.

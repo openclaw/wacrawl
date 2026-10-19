@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Run macOS CI on Apple Silicon `xcode-27` runners while retaining the macOS 13 deployment target.
+
 ## 0.4.3 - 2026-10-16
 
 **Highlights:** Ship Go standard-library and scanner dependency security fixes, with refreshed CrawlKit and cryptography dependencies.
