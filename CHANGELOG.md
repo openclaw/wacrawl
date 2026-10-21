@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Security: build source, CI, releases, and analysis tools with Go 1.27.3 for the GO-2026-6809 certificate-validation fix, retaining the Go 1.27.0 source minimum.
+
 - Run macOS CI on Apple Silicon `xcode-27` runners while retaining the macOS 13 deployment target.
 
 ## 0.4.3 - 2026-10-16
