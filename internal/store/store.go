@@ -34,6 +34,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		sqlitedsn.P("_pragma", "journal_mode(WAL)"),
 		sqlitedsn.P("_pragma", "synchronous(NORMAL)"),
 		sqlitedsn.P("_pragma", "busy_timeout(5000)"),
+		// Write transactions read before they write; a deferred BEGIN cannot
+		// wait for a concurrent writer and fails with SQLITE_BUSY instead.
+		sqlitedsn.P("_txlock", "immediate"),
 	)
 	if err != nil {
 		return nil, err
