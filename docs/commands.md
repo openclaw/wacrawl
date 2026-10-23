@@ -189,6 +189,8 @@ wacrawl --sync-max-age 1h chats
 
 When the source is unavailable but an archive exists, `--sync auto` warns and continues with the archive. `--sync always` returns an error.
 
+Concurrent commands can share an archive. Archive migrations and imports acquire their write lock before reading and wait up to five seconds for another writer, avoiding stale-snapshot upgrade failures. This also applies when opening the archive with `--sync never`; read-only export and validation transactions remain deferred and can overlap a writer.
+
 ## Global flags
 
 | Flag | Meaning |
