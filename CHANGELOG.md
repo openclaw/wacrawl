@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-- Update CrawlKit to v0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1 and its matching libc runtime.
+## 0.4.4 - 2026-10-23
+
+**Highlights:** Make concurrent archive commands wait safely for SQLite writes and honor lock-wait deadlines, with Go certificate-validation security fixes.
 
 - Let concurrent archive commands wait for write transactions instead of failing immediately with SQLite busy/snapshot errors, including parallel `--sync never` reads. Thanks @parth-garg01.
+- Update CrawlKit to v0.17.3 so SQLite lock waits honor context deadlines, with SQLite 3.54.1 and its matching libc runtime.
 
 - Security: build source, CI, releases, and analysis tools with Go 1.27.3 for the GO-2026-6809 certificate-validation fix, retaining the Go 1.27.0 source minimum.
 

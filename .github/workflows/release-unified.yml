@@ -27,6 +27,7 @@ jobs:
       version: ${{ inputs.version }}
       dry-run: ${{ inputs.dry_run }}
       repository-type: openclaw
+      require-signed-tag: true
       homebrew-tap: openclaw/homebrew-tap
       homebrew-formula: wacrawl
       archive-files: '["CHANGELOG.md","LICENSE","README.md"]'
