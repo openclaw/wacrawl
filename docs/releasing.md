@@ -9,6 +9,7 @@ The changelog section for the version must be dated before dispatch. Run the dry
 Then create an annotated SSH-signed tag at that exact commit using the fleet release key. Verify it against the committed allowlist before pushing; never move an existing tag:
 
 ```bash
+set -e
 git -c gpg.format=ssh -c user.signingkey=/path/to/fleet-release-key tag -s vX.Y.Z <release-prep-commit> -m "Release vX.Y.Z"
 git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=.github/release-allowed-signers verify-tag vX.Y.Z
 git push origin refs/tags/vX.Y.Z

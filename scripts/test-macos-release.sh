@@ -23,9 +23,9 @@ grep -F 'checksum-filename: checksums.txt' "$unified" >/dev/null
 grep -F 'nfpm: auto' "$unified" >/dev/null
 grep -F 'stable-identifier: org.openclaw.wacrawl' "$unified" >/dev/null
 grep -F 'darwin-universal: disabled' "$unified" >/dev/null
-if grep -F 'require-signed-tag: true' "$unified" >/dev/null; then
-  fail "unified release workflow still requires a locally signed tag"
-fi
+grep -F 'require-signed-tag: true' "$unified" >/dev/null || \
+  fail "unified release workflow must verify the signed release tag"
+[[ -s "$root/.github/release-allowed-signers" ]] || fail "release signer allowlist is missing"
 if release_output=$(make -s -C "$root" release VERSION=v0.3.5 2>&1); then
   fail "local release target unexpectedly succeeded"
 fi
