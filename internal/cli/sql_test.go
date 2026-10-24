@@ -118,6 +118,40 @@ func TestQueryReadOnlySQLNormalizesValuesAndEmptyResults(t *testing.T) {
 	}
 }
 
+func TestQueryReadOnlySQLPreservesJSONText(t *testing.T) {
+	ctx := t.Context()
+	dbPath := filepath.Join(t.TempDir(), "archive.db")
+	st, err := store.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := queryReadOnlySQL(ctx, dbPath, `SELECT json_object('text', 'hello', 'items', json_array(1, 2)) AS payload`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.rows) != 1 {
+		t.Fatalf("rows = %#v", result.rows)
+	}
+	payload, ok := result.rows[0]["payload"].(string)
+	if !ok {
+		t.Fatalf("JSON value is not text: %#v", result.rows[0]["payload"])
+	}
+	var decoded struct {
+		Text  string `json:"text"`
+		Items []int  `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		t.Fatalf("decode JSON query result: %v", err)
+	}
+	if decoded.Text != "hello" || len(decoded.Items) != 2 || decoded.Items[0] != 1 || decoded.Items[1] != 2 {
+		t.Fatalf("decoded JSON = %#v", decoded)
+	}
+}
+
 func TestQueryReadOnlySQLOpensPathWithURICharacters(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "archive?tenant=one#fragment.db")
