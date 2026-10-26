@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update CodeQL init and analyze together to v4.39.1 and group future CodeQL action updates to keep security analysis working (thanks @dependabot).
+
 ## 0.4.4 - 2026-10-23
 
 **Highlights:** Make concurrent archive commands wait safely for SQLite writes and honor lock-wait deadlines, with Go certificate-validation security fixes.

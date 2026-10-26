@@ -17,6 +17,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    groups:
+      # CodeQL steps share configuration and must use the same action version.
+      codeql:
+        patterns:
+          - github/codeql-action/*
     ignore:
       # release-workflows owns and advances this moving major tag within v1.
       - dependency-name: openclaw/release-workflows/.github/workflows/release-go-cli.yml
