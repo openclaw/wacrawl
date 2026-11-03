@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep weekly main CodeQL scans instead of repeating analysis on every main push, retain every pull-request scan, and add independently scheduled manual full scans.
+
 - Refresh the isolated gosec analysis tool to v2.30.0 while preserving the application dependencies, SQLite runtime pairing, and Go 1.27.0 source minimum.
 - Update CodeQL init and analyze together to v4.39.1 and group future CodeQL action updates to keep security analysis working (thanks @dependabot).
 
