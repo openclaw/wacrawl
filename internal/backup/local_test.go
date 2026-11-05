@@ -50,7 +50,7 @@ func TestSavedBackupRemoteIsPreserved(t *testing.T) {
 	if err != nil || cfg.Remote != "https://example.invalid/personal-backup.git" {
 		t.Fatalf("remote=%q, error=%v", cfg.Remote, err)
 	}
-	after, err := os.ReadFile(path)
+	after, err := os.ReadFile(path) // #nosec G304 -- reads the generated config in this test's temporary directory.
 	if err != nil || !bytes.Equal(body, after) {
 		t.Fatal("loading rewrote saved config")
 	}
@@ -79,7 +79,7 @@ func TestBackupPushWithoutRemoteStaysLocal(t *testing.T) {
 	if got := strings.TrimSpace(string(auditGitBytes(t, opts.Repo, "tag", "--list"))); got != "snapshot/local" {
 		t.Fatalf("local tag=%q", got)
 	}
-	logs, err := os.ReadFile(trace)
+	logs, err := os.ReadFile(trace) // #nosec G304 -- reads the Git trace generated in this test's temporary directory.
 	if err != nil {
 		t.Fatal(err)
 	}
