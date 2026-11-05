@@ -61,7 +61,7 @@ deps:
 	GOWORK=off go mod tidy
 	GOWORK=off go -C tools mod tidy
 	git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
-	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 snapshot:
 	GOWORK=off goreleaser release --snapshot --clean --skip=publish

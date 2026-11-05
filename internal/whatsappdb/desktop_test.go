@@ -286,7 +286,8 @@ func TestImportDesktopRejectsAccountSwitchAtSameStore(t *testing.T) {
 	mustExec(t, chatDB, `
 delete from ZWAMESSAGE;
 insert into ZWAMEDIAITEM values (2, 10, 'Media/foreign.bin', '', 'foreign', '', 7);
-insert into ZWAMESSAGE values (10, 1, null, 2, 'account-b', 0, 700000010, 'other account', 1, 0, '111@s.whatsapp.net', '', 'Other');`)
+insert into ZWAMESSAGE values (10, 1, null, 2, 'account-b', 0, 700000010, 'other account', 1, 0, '111@s.whatsapp.net', 'other-owner@s.whatsapp.net', 'Other');
+insert into ZWAMESSAGE values (11, 2, 1, null, 'account-b-group', 0, 700000011, 'other group', 0, 0, '123@g.us', '123@g.us', 'Other');`)
 	if err := chatDB.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -508,6 +509,24 @@ insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net');`)
 			t.Fatalf("ambiguous message recipients error = %v", err)
 		}
 	})
+	t.Run("incoming group destination is not an account identity", func(t *testing.T) {
+		chatPath := filepath.Join(t.TempDir(), chatDBName)
+		db, err := sql.Open("sqlite", chatPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mustExec(t, db, `
+create table ZWAMESSAGE (ZISFROMME integer, ZTOJID varchar);
+insert into ZWAMESSAGE values (0, 'owner@s.whatsapp.net');
+insert into ZWAMESSAGE values (0, ' 123@G.US ');`)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		identity, _, err := readAccountIdentity(ctx, filepath.Join(t.TempDir(), axolotlDBName), chatPath)
+		if err != nil || !strings.HasPrefix(identity, "wa-account:") {
+			t.Fatalf("owner plus group recipient identity = %q, %v", identity, err)
+		}
+	})
 	t.Run("metadata and messages disagree", func(t *testing.T) {
 		dir := t.TempDir()
 		axolotlPath := filepath.Join(dir, axolotlDBName)
@@ -547,6 +566,40 @@ insert into ZWAMESSAGE values (0, 'owner-b@s.whatsapp.net');`)
 			t.Fatalf("empty schema identity = %q, %v", identity, err)
 		}
 	})
+}
+
+func TestImportDesktopIgnoresIncomingGroupDestinationForAccountIdentity(t *testing.T) {
+	ctx := context.Background()
+	source := t.TempDir()
+	createFixtureDBs(t, source)
+	archive, err := store.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	initial, err := Import(ctx, archive, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(source, chatDBName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, `
+update ZWAMESSAGE set ZTOJID='fixture-owner@s.whatsapp.net' where Z_PK=1;
+update ZWAMESSAGE set ZTOJID='123@g.us' where Z_PK=3;`)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reimported, err := Import(ctx, archive, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reimported.AccountIdentity != initial.AccountIdentity {
+		t.Fatalf("reimport account identity = %q, want %q", reimported.AccountIdentity, initial.AccountIdentity)
+	}
 }
 
 func TestExtractRejectsAccountChangeDuringSnapshot(t *testing.T) {

@@ -65,7 +65,7 @@ WhatsApp Desktop keeps its macOS data under:
 
 `wacrawl` snapshots `ChatStorage.sqlite`, `ContactsV2.sqlite`, and their SQLite sidecars before reading. With `--copy-media`, it also copies referenced files from `Message/Media/`. Its own archive defaults to `~/.wacrawl/wacrawl.db`.
 
-Imports merge by stable source identity, retain older history that has disappeared from the current desktop snapshot, and preserve explicit edits and deletions as revisions or tombstones. Use a separate `--db` for another WhatsApp account; source adoption and exact restore are deliberate operations described in the [command reference](docs/commands.md#import-and-sync).
+Imports merge by stable source identity, retain older history that has disappeared from the current desktop snapshot, and preserve explicit edits and deletions as revisions or tombstones. Incoming group destinations do not count as account identities; distinct direct-account identities and mismatched archive bindings still stop the import. Use a separate `--db` for another WhatsApp account; source adoption and exact restore are deliberate operations described in the [command reference](docs/commands.md#import-and-sync).
 
 ## Search and automation
 

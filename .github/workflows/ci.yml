@@ -132,7 +132,7 @@ jobs:
           git diff --exit-code -- go.mod go.sum tools/go.mod tools/go.sum
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
       - name: Run govulncheck
         run: '"$(go env GOPATH)/bin/govulncheck" ./...'
@@ -156,7 +156,7 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: v2.18.2
+          version: v2.19.0
           args: release --snapshot --clean --skip=publish
 
       - name: Test macOS release scripts
