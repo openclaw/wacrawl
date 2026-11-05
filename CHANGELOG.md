@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Ignore incoming group destinations when identifying a WhatsApp account, allowing valid single-account imports while preserving account isolation. Thanks @goutamadwant and @CHN-CYC.
+- Refresh SQLite and isolated analysis dependencies, vulnerability checking and GoReleaser while retaining the Go 1.27.0 minimum and Go 1.27.3 toolchain.
+
 - Keep weekly main CodeQL scans instead of repeating analysis on every main push, retain every pull-request scan, and add independently scheduled manual full scans.
 
 - Refresh the isolated gosec analysis tool to v2.30.0 while preserving the application dependencies, SQLite runtime pairing, and Go 1.27.0 source minimum.

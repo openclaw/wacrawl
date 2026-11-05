@@ -144,7 +144,8 @@ func incomingMessageAccountIDs(ctx context.Context, chatDBPath string) (map[stri
 select coalesce(ZTOJID,'')
 from ZWAMESSAGE
 where coalesce(ZISFROMME,0)=0
-  and trim(coalesce(ZTOJID,''))<>''`, ids); err != nil {
+  and trim(coalesce(ZTOJID,''))<>''
+  and lower(trim(ZTOJID)) not like '%@g.us'`, ids); err != nil {
 		return nil, err
 	}
 	return ids, nil
