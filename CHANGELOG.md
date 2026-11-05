@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-05
+
+**Highlights:** Keep new backups local until a remote is configured while preserving existing origins, and fix false multiple-account rejections during import.
+
 - Keep new backups local until a remote is configured, preserve saved remotes and existing origins, and report whether an upload occurred. Thanks @NasAndNora for raising the shared default-remote issue.
 
 - Ignore incoming group destinations when identifying a WhatsApp account, allowing valid single-account imports while preserving account isolation. Thanks @goutamadwant and @CHN-CYC.
