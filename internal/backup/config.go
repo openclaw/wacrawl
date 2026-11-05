@@ -9,10 +9,6 @@ import (
 	"strings"
 )
 
-const (
-	defaultRemote = "https://github.com/steipete/backup-wacrawl.git"
-)
-
 var renameConfigFile = os.Rename
 
 type Config struct {
@@ -40,7 +36,6 @@ type Options struct {
 func DefaultConfig() Config {
 	return Config{
 		Repo:     "~/Projects/backup-wacrawl",
-		Remote:   defaultRemote,
 		Identity: "~/.wacrawl/age.key",
 	}
 }

@@ -61,10 +61,14 @@ func (a *app) runBackupInit(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if a.json {
-		return a.print(map[string]any{"repo": cfg.Repo, "remote": cfg.Remote, "identity": cfg.Identity, "recipient": recipient})
+	hasRemote, err := backup.HasRemote(ctx, cfg)
+	if err != nil {
+		return err
 	}
-	_, err = fmt.Fprintf(a.stdout, "repo=%s\nremote=%s\nidentity=%s\nrecipient=%s\n", cfg.Repo, cfg.Remote, cfg.Identity, recipient)
+	if a.json {
+		return a.print(map[string]any{"repo": cfg.Repo, "remote": cfg.Remote, "identity": cfg.Identity, "recipient": recipient, "pushed": opts.Push && hasRemote})
+	}
+	_, err = fmt.Fprintf(a.stdout, "repo=%s\nremote=%s\nidentity=%s\nrecipient=%s\npushed=%t\n", cfg.Repo, cfg.Remote, cfg.Identity, recipient, opts.Push && hasRemote)
 	return err
 }
 

@@ -227,12 +227,15 @@ Examples:
 	case "backup":
 		_, _ = fmt.Fprint(w, `Manage encrypted Git backups of the wacrawl archive.
 
+Backups stay local until --remote, a saved remote, or an existing origin is configured.
+Output reports pushed=false when no upload occurs; --no-push always keeps it local.
+
 Usage:
   wacrawl backup <init|push|pull|status|snapshots> [flags]
 
 Commands:
-  init      Create backup config, age identity, and first encrypted backup.
-  push      Export the archive and push encrypted shards.
+  init      Create backup config, age identity, and Git checkout.
+  push      Export encrypted shards; upload only with a configured remote.
   pull      Restore encrypted shards into the configured archive DB.
   status    Inspect backup config and manifest.
   snapshots List restorable Git backup snapshots and tags.
@@ -250,10 +253,13 @@ Examples:
   wacrawl backup snapshots
   wacrawl backup push
   wacrawl --sync never backup push
-  wacrawl backup init --repo ~/Projects/backup-wacrawl --remote https://github.com/steipete/backup-wacrawl.git
+  wacrawl backup init --repo ~/Projects/backup-wacrawl --remote https://github.com/YOUR_USER/backup-wacrawl.git
 `)
 	case "backup init":
 		_, _ = fmt.Fprint(w, `Initialize encrypted Git backup configuration.
+
+No default remote. Uses a saved remote or existing origin; otherwise stays local.
+Output reports pushed=false when no upload occurs.
 
 Usage:
   wacrawl backup init [flags]
@@ -267,7 +273,10 @@ Flags:
   --no-push          Commit locally without pushing.
 `)
 	case "backup push":
-		_, _ = fmt.Fprint(w, `Export and push encrypted archive shards and copied media.
+		_, _ = fmt.Fprint(w, `Export encrypted archive shards and copied media.
+
+Uploads only with --remote, a saved remote, or an existing origin.
+Otherwise commits locally and reports pushed=false; --no-push always keeps it local.
 
 Usage:
   wacrawl backup push [flags]

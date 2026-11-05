@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep new backups local until a remote is configured, preserve saved remotes and existing origins, and report whether an upload occurred. Thanks @NasAndNora for raising the shared default-remote issue.
+
 - Ignore incoming group destinations when identifying a WhatsApp account, allowing valid single-account imports while preserving account isolation. Thanks @goutamadwant and @CHN-CYC.
 - Refresh SQLite and isolated analysis dependencies, vulnerability checking and GoReleaser while retaining the Go 1.27.0 minimum and Go 1.27.3 toolchain.
 

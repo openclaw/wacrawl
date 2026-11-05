@@ -60,6 +60,24 @@ func ensureRepoForRead(ctx context.Context, cfg Config) error {
 	return mirror.Fetch(ctx, syncOptions(cfg))
 }
 
+// HasRemote reports whether a saved/explicit remote or an existing origin is configured.
+// Existing origins remain authoritative and are never rewritten here.
+func HasRemote(ctx context.Context, cfg Config) (bool, error) {
+	if strings.TrimSpace(cfg.Remote) != "" {
+		return true, nil
+	}
+	remotes, err := scopeGit(ctx, cfg.Repo, "remote")
+	if err != nil {
+		return false, err
+	}
+	for _, remote := range strings.Fields(string(remotes)) {
+		if remote == "origin" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func commitAndPush(ctx context.Context, cfg Config, message string, push bool, manifests ...ckbackup.Manifest) (bool, error) {
 	paths, err := ownedPathspecs(ctx, cfg, manifests...)
 	if err != nil {
@@ -70,6 +88,10 @@ func commitAndPush(ctx context.Context, cfg Config, message string, push bool, m
 	}
 	changed, err := mirror.CommitPaths(ctx, mirrorOptions(cfg), message, paths)
 	if err != nil || !push {
+		return changed, err
+	}
+	hasRemote, err := HasRemote(ctx, cfg)
+	if err != nil || !hasRemote {
 		return changed, err
 	}
 	if err := verifyPendingHistory(ctx, cfg); err != nil {
