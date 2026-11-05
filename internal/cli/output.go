@@ -51,7 +51,7 @@ func (a *app) print(value any) error {
 		}
 		return tw.Flush()
 	case backup.Result:
-		_, err := fmt.Fprintf(a.stdout, "repo=%s\nchanged=%t\nencrypted=%t\nshards=%d\nmessages=%d\nmedia_files=%d\n", v.Repo, v.Changed, v.Encrypted, v.Shards, v.Messages, v.MediaFiles)
+		_, err := fmt.Fprintf(a.stdout, "repo=%s\nchanged=%t\nencrypted=%t\nshards=%d\nmessages=%d\nmedia_files=%d\npushed=%t\n", v.Repo, v.Changed, v.Encrypted, v.Shards, v.Messages, v.MediaFiles, v.Pushed)
 		if err == nil && v.Ref != "" {
 			_, err = fmt.Fprintf(a.stdout, "ref=%s\n", v.Ref)
 		}

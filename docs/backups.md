@@ -31,7 +31,15 @@ wacrawl backup init \
   --remote <git-url>
 ```
 
-When omitted, the current default remote is `https://github.com/steipete/backup-wacrawl.git`; pass `--remote` for another private repository.
+There is no default remote. Without `--remote`, a saved `remote`, or an existing
+Git `origin`, initialization and backups commit locally without uploading.
+Existing saved remotes and origins keep working without silent rewrites; an
+existing origin takes precedence. Output reports `pushed=false` when no upload
+occurs. `--no-push` also keeps changes local when a remote exists.
+
+For a local-only checkout, run `wacrawl backup init` without `--remote`. To upload
+later, configure its origin with `git -C ~/Projects/backup-wacrawl remote add origin <git-url>`
+and run `wacrawl backup push`.
 
 This writes `~/.wacrawl/backup.json`, creates `~/.wacrawl/age.key` if needed, clones or initializes the local checkout, and prints the public age recipient.
 

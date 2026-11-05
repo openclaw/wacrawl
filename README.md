@@ -90,6 +90,12 @@ Running imports on a launchd or cron schedule? macOS prompts "would like to acce
 
 ## Encrypted backups
 
+There is no default backup remote. `backup init` and `backup push` stay local unless
+you pass `--remote`, save a remote in the backup config, or already have a Git
+`origin`. Existing saved remotes and origins are preserved; an existing origin
+takes precedence. Output reports `pushed=false` when no upload occurs, including
+with `--no-push`.
+
 `wacrawl backup` exports deterministic JSONL shards, compresses them, and encrypts them to one or more X25519 age recipients before Git sees the data. Copied media can travel in content-deduplicated encrypted blobs, and restores verify hashes and cross-table references before replacing the archive.
 
 ```bash
@@ -106,7 +112,7 @@ The manifest remains cleartext and reveals backup timing, public recipients, cou
 - The WhatsApp databases are opened read-only through a temporary SQLite snapshot.
 - Normal archive and search commands do not upload data or write into WhatsApp's app container.
 - The web viewer is loopback-only, read-only, protected by a random per-run access key, and restricts media reads to known roots.
-- `backup push` is the explicit networked path; it sends age-encrypted shards to the configured Git remote.
+- `backup init` and `backup push` can contact a configured Git remote; `--no-push` suppresses uploads.
 
 The archive still contains private message data in plaintext. Keep `~/.wacrawl/wacrawl.db` and copied media out of commits, shared logs, and untrusted backups unless sharing them is intentional.
 
