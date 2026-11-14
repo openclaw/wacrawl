@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Build the application and isolated analysis tools with Go 1.27.4 for the net/http security fix, retaining the Go 1.27.0 source minimum.
+- Link the independently maintained wacrawl-mcp community integration. Thanks @renzactus.
+
 ## 0.5.0 - 2026-11-05
 
 **Highlights:** Keep new backups local until a remote is configured while preserving existing origins, and fix false multiple-account rejections during import.

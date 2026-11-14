@@ -86,6 +86,10 @@ wacrawl --json --sync never contacts export
 
 See the [command reference](docs/commands.md) for filters, sync modes, SQL constraints, and every subcommand.
 
+### Community integrations
+
+[wacrawl-mcp](https://github.com/renzactus/wacrawl-mcp) is an independently maintained MCP server that gives AI assistants access to wacrawl archives. Its setup, live reads, and optional messaging features belong to that project; wacrawl itself remains a read-only archive tool.
+
 Running imports on a launchd or cron schedule? macOS prompts "would like to access data from other apps" on every background run, and Allow does not persist. The [scheduled imports guide](docs/scheduled-imports.md) covers the Full Disk Access setup that makes unattended imports work.
 
 ## Encrypted backups
@@ -147,7 +151,7 @@ the macOS 13 deployment target.
 
 Requires Go 1.27.0 or newer.
 
-The preferred build toolchain is Go 1.27.3, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
+The preferred build toolchain is Go 1.27.4, selected automatically by `go.mod` and CI. The source minimum remains Go 1.27.0.
 
 Keep `modernc.org/libc` at the exact version required by `modernc.org/sqlite`; SQLite's generated code depends on that runtime pairing. Update them together, and check test-only compiler updates for indirect libc upgrades. `make deps` and CI verify the resolved versions.
 
