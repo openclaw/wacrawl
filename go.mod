@@ -6,7 +6,7 @@ toolchain go1.27.4
 
 require (
 	filippo.io/age v1.3.2
-	github.com/openclaw/crawlkit v0.17.3
+	github.com/openclaw/crawlkit v0.17.4
 	modernc.org/sqlite v1.61.1
 )
 
