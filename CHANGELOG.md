@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-11-15
+
+**Highlights:** Ship the Go net/http security fix in release binaries while retaining the Go 1.27.0 source minimum and macOS 13 support.
+
 - Build the application and isolated analysis tools with Go 1.27.4 for the net/http security fix, retaining the Go 1.27.0 source minimum.
 - Link the independently maintained wacrawl-mcp community integration. Thanks @renzactus.
 
