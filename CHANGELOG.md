@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Update CrawlKit to v0.18.0 and SQLite to v1.62.0 with its matching libc v1.80.1 runtime, preserving literal archive paths and canceled-open behavior while retaining the Go 1.27.0 minimum.
+
 ## 0.5.1 - 2026-11-15
 
 **Highlights:** Ship the Go net/http security fix in release binaries while retaining the Go 1.27.0 source minimum and macOS 13 support.
